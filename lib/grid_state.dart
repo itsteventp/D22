@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'grid_cell.dart';
 import 'map_node.dart';
+import 'theme.dart';
 
 class GridState extends ChangeNotifier {
   // Screens navigation: 0: Map, 1: Grid
@@ -151,16 +152,8 @@ class GridState extends ChangeNotifier {
           .maybeSingle();
 
       if (response == null) {
-        // Invalid Code: Clear input and show rose styled SnackBar
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Invalid Code'),
-              behavior: SnackBarBehavior.floating,
-              backgroundColor: Color(0xFFF43F5E), // rose 500
-              duration: Duration(seconds: 2),
-            ),
-          );
+          _showToast(context, 'Invalid code', AppColors.error);
         }
         return;
       }
@@ -173,42 +166,25 @@ class GridState extends ChangeNotifier {
       // Check if already mapped
       if (_nodes.any((n) => n.id == itemId)) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Code already mapped'),
-              behavior: SnackBarBehavior.floating,
-              backgroundColor: Color(0xFF71717A), // zinc 500
-              duration: Duration(seconds: 2),
-            ),
-          );
+          _showToast(context, 'Already mapped: $title', AppColors.textMuted);
         }
         return;
       }
 
       // Map concept strings to visual accent colors
-      Color conceptColor = Colors.grey;
+      Color conceptColor = AppColors.textMuted;
       switch (concept.toLowerCase()) {
-        case 'c1':
-          conceptColor = const Color(0xFFAB47BC); // Purple
-          break;
-        case 'c2':
-          conceptColor = const Color(0xFF42A5F5); // Blue
-          break;
-        case 'c3':
-          conceptColor = const Color(0xFF34D399); // Green (emerald 400)
-          break;
-        case 'c4':
-          conceptColor = const Color(0xFFFFA726); // Orange
-          break;
-        case 'c5':
-          conceptColor = const Color(0xFFF43F5E); // Red (rose 400)
-          break;
+        case 'c1': conceptColor = AppColors.conceptPurple; break;
+        case 'c2': conceptColor = AppColors.conceptBlue;   break;
+        case 'c3': conceptColor = AppColors.conceptTeal;   break;
+        case 'c4': conceptColor = AppColors.conceptOrange; break;
+        case 'c5': conceptColor = AppColors.conceptRose;   break;
       }
 
-      // Semi-random spawn coordinates within view bounds
+      // Semi-random spawn near canvas center
       final Random rand = Random();
-      final double rx = 50.0 + rand.nextDouble() * 250.0;
-      final double ry = 50.0 + rand.nextDouble() * 250.0;
+      final double rx = 120.0 + rand.nextDouble() * 300.0;
+      final double ry = 100.0 + rand.nextDouble() * 220.0;
 
       final newNode = MapNode(
         id: itemId,
@@ -225,28 +201,57 @@ class GridState extends ChangeNotifier {
       notifyListeners();
 
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Code mapped: $title'),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: const Color(0xFF10B981), // emerald 500
-            duration: const Duration(seconds: 2),
-          ),
-        );
+        _showToast(context, 'Mapped: $title', AppColors.success);
       }
 
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error validating code: $e'),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: const Color(0xFFF43F5E), // rose 500
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        _showToast(context, 'Error: $e', AppColors.error);
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Floating toast helper
+  // ---------------------------------------------------------------------------
+  void _showToast(BuildContext context, String message, Color accentColor) {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1C24),
+            borderRadius: BorderRadius.circular(12.0),
+            border: Border(
+              left: BorderSide(color: accentColor, width: 3.0),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Text(
+            message,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12.5,
+              color: Color(0xFFEEEEF5),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        margin: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        duration: const Duration(seconds: 2),
+        padding: EdgeInsets.zero,
+      ),
+    );
   }
 
   // Grid Mode Actions

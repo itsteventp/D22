@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'grid_state.dart';
 import 'puzzle_board.dart';
 import 'map_screen.dart';
+import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   await Supabase.initialize(
     url: 'https://pvsnqcnpunhuxquhlcld.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2c25xY25wdW5odXhxdWhsY2xkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNzkwMDksImV4cCI6MjA5NTg1NTAwOX0.kflbafAlRmpLEhAEU2isJKSJATtsMeAQ9ZUvWCnubFU',
+    anonKey:
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2c25xY25wdW5odXhxdWhsY2xkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyNzkwMDksImV4cCI6MjA5NTg1NTAwOX0.kflbafAlRmpLEhAEU2isJKSJATtsMeAQ9ZUvWCnubFU',
   );
 
   runApp(
@@ -29,16 +32,15 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'ARG Decryptor System',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        primarySwatch: Colors.grey,
-        fontFamily: 'monospace',
-      ),
+      theme: buildAppTheme(),
       home: const MainNavigator(),
     );
   }
 }
 
+// ---------------------------------------------------------------------------
+// MainNavigator — floating tab bar + screen switcher
+// ---------------------------------------------------------------------------
 class MainNavigator extends StatelessWidget {
   const MainNavigator({super.key});
 
@@ -47,49 +49,41 @@ class MainNavigator extends StatelessWidget {
     final state = Provider.of<GridState>(context, listen: false);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF09090B), // Zinc 950
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Column(
           children: [
-            // Global Screen Toggle (Tab selection)
+            // Floating pill tab bar
             Padding(
-              padding: const EdgeInsets.only(top: 24.0, bottom: 8.0),
+              padding: const EdgeInsets.only(top: 20.0, bottom: 6.0),
               child: Selector<GridState, int>(
                 selector: (_, s) => s.currentScreen,
                 builder: (context, currentScreen, _) {
-                  return Container(
-                    padding: const EdgeInsets.all(4.0),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF18181B), // Zinc 900
-                      borderRadius: BorderRadius.circular(8.0),
-                      border: Border.all(
-                        color: const Color(0xFF27272A), // Zinc 800
-                        width: 1.0,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _buildTabButton(context, 0, "Phase 1: Map", currentScreen == 0, state),
-                        const SizedBox(width: 4.0),
-                        _buildTabButton(context, 1, "Phase 2: Grid", currentScreen == 1, state),
-                      ],
-                    ),
+                  return _AppTabBar(
+                    currentScreen: currentScreen,
+                    onTap: state.setScreen,
                   );
                 },
               ),
             ),
 
-            // Active Screen Content
+            // Active screen
             Expanded(
               child: Selector<GridState, int>(
                 selector: (_, s) => s.currentScreen,
                 builder: (context, currentScreen, _) {
-                  if (currentScreen == 0) {
-                    return const MapScreen();
-                  } else {
-                    return const PuzzleBoard();
-                  }
+                  return AnimatedSwitcher(
+                    duration: AppDurations.medium,
+                    switchInCurve: Curves.easeOut,
+                    switchOutCurve: Curves.easeIn,
+                    transitionBuilder: (child, anim) => FadeTransition(
+                      opacity: anim,
+                      child: child,
+                    ),
+                    child: currentScreen == 0
+                        ? const MapScreen(key: ValueKey('map'))
+                        : const PuzzleBoard(key: ValueKey('grid')),
+                  );
                 },
               ),
             ),
@@ -98,28 +92,95 @@ class MainNavigator extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _buildTabButton(BuildContext context, int index, String label, bool isSelected, GridState state) {
+// ---------------------------------------------------------------------------
+// _AppTabBar — pill-style floating selector
+// ---------------------------------------------------------------------------
+class _AppTabBar extends StatelessWidget {
+  final int currentScreen;
+  final void Function(int) onTap;
+
+  const _AppTabBar({required this.currentScreen, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3.0),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+      ),
+      child: Stack(
+        children: [
+          // Sliding active indicator
+          AnimatedAlign(
+            duration: AppDurations.normal,
+            curve: Curves.easeInOutCubic,
+            alignment: currentScreen == 0
+                ? Alignment.centerLeft
+                : Alignment.centerRight,
+            child: FractionallySizedBox(
+              widthFactor: 0.5,
+              child: Container(
+                height: 34.0,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceHigh,
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                ),
+              ),
+            ),
+          ),
+          // Tab buttons (on top of indicator)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _TabButton(
+                label: 'Phase 1 · Map',
+                isSelected: currentScreen == 0,
+                onTap: () => onTap(0),
+              ),
+              _TabButton(
+                label: 'Phase 2 · Grid',
+                isSelected: currentScreen == 1,
+                onTap: () => onTap(1),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TabButton extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _TabButton({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => state.setScreen(index),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF09090B) : Colors.transparent, // Zinc 950
-          borderRadius: BorderRadius.circular(6.0),
-          border: isSelected
-              ? Border.all(
-                  color: const Color(0xFF27272A),
-                  width: 1.0,
-                )
-              : null,
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? Colors.white : const Color(0xFFA1A1AA),
-            fontSize: 12.0,
-            fontWeight: FontWeight.w600,
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 140.0,
+        height: 34.0,
+        child: Center(
+          child: AnimatedDefaultTextStyle(
+            duration: AppDurations.fast,
+            style: GoogleFonts.inter(
+              fontSize: 12.5,
+              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+              color: isSelected ? AppColors.textPrimary : AppColors.textMuted,
+            ),
+            child: Text(label),
           ),
         ),
       ),
