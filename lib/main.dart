@@ -1,11 +1,17 @@
+import 'dart:math';
+import 'dart:ui' show lerpDouble;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'grid_state.dart';
-import 'puzzle_board.dart';
 import 'map_screen.dart';
+import 'puzzle_board.dart';
 import 'theme.dart';
+import 'widgets/pentagram_painter.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,148 +45,443 @@ class MyApp extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// MainNavigator — floating tab bar + screen switcher
+// MainNavigator — owns the transition animation and the persistent pentagram.
+//
+// Layout model:
+//   Stack ─────────────────────────────────────────────────
+//   │  [0] MapScreen      full-size, fades to 0 as t → 1
+//   │  [1] PuzzleBoard    slides up from below as t → 1
+//   │  [2] PentagramOverlay  animated center/radius; always on top
+//   │  [3] Dev FAB        always accessible for testing
+//   ────────────────────────────────────────────────────────
+//
+// t = _transAnim.value: 0.0 = Map view (pentagram centered)
+//                       1.0 = Grid view (pentagram at top)
 // ---------------------------------------------------------------------------
-class MainNavigator extends StatelessWidget {
+class MainNavigator extends StatefulWidget {
   const MainNavigator({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  State<MainNavigator> createState() => _MainNavigatorState();
+}
+
+class _MainNavigatorState extends State<MainNavigator>
+    with TickerProviderStateMixin {
+  // ── Transition (map ↔ grid) ────────────────────────────────────────────────
+  late final AnimationController _transCtrl;
+  late final CurvedAnimation _transAnim;
+
+  // ── Thread-draw animation (fires once when all 5 endings unlocked) ─────────
+  late final AnimationController _threadCtrl;
+  bool _threadTriggered = false;
+
+  // ── Elapsed time → core pulse ──────────────────────────────────────────────
+  late final Ticker _elapsedTicker;
+  final ValueNotifier<double> _elapsedNotifier = ValueNotifier(0.0);
+  double _elapsed = 0.0;
+  DateTime _lastElapsedTick = DateTime.now();
+
+  // ── Pentagram hover state (triggers setState, not every frame) ─────────────
+  String? _hoveredPentagramId;
+  SystemMouseCursor _pentagramCursor = SystemMouseCursors.basic;
+
+  // ── Canvas size (captured once from LayoutBuilder) ─────────────────────────
+  Size _screenSize = const Size(800, 600);
+
+  // ── Pentagram geometry constants ───────────────────────────────────────────
+  //   Map mode:  node radius 18 px, layout radius up to 165 px
+  //   Grid mode: node radius 10 px, layout radius 50 px (compact header)
+  static const double _gridHeaderH   = 158.0; // pixels reserved for mini pentagram
+  static const double _gridCenterY   = 78.0;  // center Y of mini pentagram
+  static const double _gridLayoutR   = 50.0;
+  static const double _mapNodeR      = 18.0;
+  static const double _gridNodeR     = 10.0;
+  static const double _mapCoreR      = 12.0;
+  static const double _gridCoreR     = 7.0;
+  static const double _inputBarH     = 66.0;  // approximate height of MapScreen input bar
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Lifecycle
+  // ══════════════════════════════════════════════════════════════════════════
+  @override
+  void initState() {
+    super.initState();
+
+    _transCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 650),
+    );
+    _transAnim = CurvedAnimation(
+      parent: _transCtrl,
+      curve: Curves.easeInOutCubic,
+    );
+
+    _threadCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2800),
+    );
+
+    _elapsedTicker = createTicker(_onElapsedTick)..start();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final state = Provider.of<GridState>(context, listen: false);
+      state.addListener(_onStateChanged);
+
+      // Handle already-complete state on cold start
+      if (state.allEndingsUnlocked) {
+        _threadTriggered = true;
+        _threadCtrl.value = 1.0;
+      }
+    });
+  }
+
+  void _onElapsedTick(Duration _) {
+    final now = DateTime.now();
+    final dt =
+        (now.difference(_lastElapsedTick).inMicroseconds / 1e6).clamp(0.0, 0.05);
+    _lastElapsedTick = now;
+    _elapsed += dt;
+    _elapsedNotifier.value = _elapsed;
+  }
+
+  void _onStateChanged() {
+    if (!mounted) return;
     final state = Provider.of<GridState>(context, listen: false);
 
+    // Thread animation: play once when all five endings are first discovered
+    if (state.allEndingsUnlocked && !_threadTriggered) {
+      _threadTriggered = true;
+      _threadCtrl.forward(from: 0.0);
+    }
+
+    // Drive the transition based on GridState.currentScreen
+    final screen = state.currentScreen;
+    if (screen == 1) {
+      _transCtrl.forward();
+    } else {
+      _transCtrl.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    try {
+      Provider.of<GridState>(context, listen: false)
+          .removeListener(_onStateChanged);
+    } catch (_) {}
+    _transCtrl.dispose();
+    _threadCtrl.dispose();
+    _elapsedTicker.dispose();
+    _elapsedNotifier.dispose();
+    super.dispose();
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Pentagram geometry helpers
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /// Center of the pentagram when displaying the Map view.
+  Offset _mapCenter(Size s) =>
+      Offset(s.width / 2, (_inputBarH + s.height) / 2);
+
+  /// Center of the pentagram when displayed as a grid header strip.
+  Offset _gridCenter(Size s) => Offset(s.width / 2, _gridCenterY);
+
+  /// Layout radius (center → vertex) in Map mode, clamped for small screens.
+  double _mapRadius(Size s) => (s.shortestSide * 0.28).clamp(90.0, 165.0);
+
+  /// Compute the 5 vertex positions for the given center and radius.
+  Map<String, Offset> _computeConceptPositions(Offset center, double radius) {
+    const concepts = ['c1', 'c2', 'c3', 'c4', 'c5'];
+    return {
+      for (var i = 0; i < 5; i++)
+        concepts[i]: Offset(
+          center.dx + cos(-pi / 2 + i * 2 * pi / 5) * radius,
+          center.dy + sin(-pi / 2 + i * 2 * pi / 5) * radius,
+        )
+    };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Hit-testing
+  // ══════════════════════════════════════════════════════════════════════════
+
+  String? _hitTest(
+    Offset pos,
+    Offset center,
+    Map<String, Offset> cPos,
+    double nodeR,
+    double coreR,
+    GridState state,
+  ) {
+    // Core has a slightly larger hit target (+10 px ring)
+    if (state.allEndingsUnlocked &&
+        (pos - center).distance < coreR + 10) {
+      return kCoreNodeId;
+    }
+    for (final e in cPos.entries) {
+      if ((pos - e.value).distance < nodeR + 8) return e.key;
+    }
+    return null;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Interaction handlers
+  // ══════════════════════════════════════════════════════════════════════════
+
+  void _handleTap(
+    TapUpDetails d,
+    Offset center,
+    Map<String, Offset> cPos,
+    double nodeR,
+    double coreR,
+    bool isGridMode,
+  ) {
+    final state = Provider.of<GridState>(context, listen: false);
+    final hit = _hitTest(d.localPosition, center, cPos, nodeR, coreR, state);
+    if (hit == null) return;
+
+    if (hit == kCoreNodeId) {
+      // Core toggles between Map and Grid
+      state.setScreen(isGridMode ? 0 : 1);
+    } else if (isGridMode && state.isEndingActive(hit)) {
+      // Vertex tool selection — ONLY active in grid mode
+      const tMap = {'c1': 1, 'c2': 2, 'c3': 3, 'c4': 4, 'c5': 5};
+      state.setActiveTool(tMap[hit] ?? 0);
+    }
+    // In map mode: vertices are purely visual — no tap action
+  }
+
+  void _handleHover(
+    PointerHoverEvent e,
+    Offset center,
+    Map<String, Offset> cPos,
+    double nodeR,
+    double coreR,
+    bool isGridMode,
+    GridState state,
+  ) {
+    final hit = _hitTest(e.localPosition, center, cPos, nodeR, coreR, state);
+
+    // Only show click cursor for interactive nodes
+    SystemMouseCursor cursor = SystemMouseCursors.basic;
+    if (hit == kCoreNodeId && state.allEndingsUnlocked) {
+      cursor = SystemMouseCursors.click;
+    } else if (hit != null && isGridMode && state.isEndingActive(hit)) {
+      cursor = SystemMouseCursors.click;
+    }
+
+    if (hit != _hoveredPentagramId || cursor != _pentagramCursor) {
+      setState(() {
+        _hoveredPentagramId = hit;
+        _pentagramCursor = cursor;
+      });
+    }
+  }
+
+  void _handleHoverExit() {
+    if (_hoveredPentagramId != null ||
+        _pentagramCursor != SystemMouseCursors.basic) {
+      setState(() {
+        _hoveredPentagramId = null;
+        _pentagramCursor = SystemMouseCursors.basic;
+      });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Build
+  // ══════════════════════════════════════════════════════════════════════════
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
-        child: Column(
-          children: [
-            // Floating pill tab bar
-            Padding(
-              padding: const EdgeInsets.only(top: 20.0, bottom: 6.0),
-              child: Selector<GridState, int>(
-                selector: (_, s) => s.currentScreen,
-                builder: (context, currentScreen, _) {
-                  return _AppTabBar(
-                    currentScreen: currentScreen,
-                    onTap: state.setScreen,
-                  );
-                },
-              ),
-            ),
+        child: LayoutBuilder(
+          builder: (ctx, constraints) {
+            _screenSize =
+                Size(constraints.maxWidth, constraints.maxHeight);
+            final s = _screenSize;
 
-            // Active screen
-            Expanded(
-              child: Selector<GridState, int>(
-                selector: (_, s) => s.currentScreen,
-                builder: (context, currentScreen, _) {
-                  return AnimatedSwitcher(
-                    duration: AppDurations.medium,
-                    switchInCurve: Curves.easeOut,
-                    switchOutCurve: Curves.easeIn,
-                    transitionBuilder: (child, anim) => FadeTransition(
-                      opacity: anim,
-                      child: child,
-                    ),
-                    child: currentScreen == 0
-                        ? const MapScreen(key: ValueKey('map'))
-                        : const PuzzleBoard(key: ValueKey('grid')),
-                  );
-                },
-              ),
-            ),
-          ],
+            return Stack(
+              clipBehavior: Clip.hardEdge,
+              children: [
+                // ── Layer 0: MapScreen — fades out as t → 1 ─────────────────
+                Positioned.fill(
+                  child: ListenableBuilder(
+                    listenable: _transAnim,
+                    builder: (ctx, child) {
+                      final t = _transAnim.value;
+                      return Opacity(
+                        opacity: (1.0 - t).clamp(0.0, 1.0),
+                        child: IgnorePointer(
+                          ignoring: t > 0.05,
+                          child: child!,
+                        ),
+                      );
+                    },
+                    child: const MapScreen(),
+                  ),
+                ),
+
+                // ── Layer 1: PuzzleBoard — slides up from below as t → 1 ─────
+                // Transform.translate is used so layout is unaffected (the widget
+                // always has full-screen height) and only the visual position moves.
+                Positioned.fill(
+                  child: ListenableBuilder(
+                    listenable: _transAnim,
+                    builder: (ctx, child) {
+                      final t = _transAnim.value;
+                      final dy = lerpDouble(s.height, _gridHeaderH, t)!;
+                      return Transform.translate(
+                        offset: Offset(0, dy),
+                        child: IgnorePointer(
+                          // interactive only once transition is nearly complete
+                          ignoring: t < 0.92,
+                          child: child!,
+                        ),
+                      );
+                    },
+                    child: const PuzzleBoard(),
+                  ),
+                ),
+
+                // ── Layer 2: Pentagram overlay — persistent, animated pos ─────
+                // Rebuilds every frame (elapsed pulse) + on transition + thread.
+                Positioned.fill(
+                  child: ListenableBuilder(
+                    listenable: Listenable.merge(
+                        [_transAnim, _threadCtrl, _elapsedNotifier]),
+                    builder: (ctx, _) {
+                      final t = _transAnim.value;
+                      final state =
+                          Provider.of<GridState>(ctx, listen: false);
+                      final isGridMode = t > 0.5;
+
+                      // Interpolated pentagram geometry
+                      final center = Offset.lerp(
+                          _mapCenter(s), _gridCenter(s), t)!;
+                      final radius = lerpDouble(
+                          _mapRadius(s), _gridLayoutR, t)!;
+                      final nodeR =
+                          lerpDouble(_mapNodeR, _gridNodeR, t)!;
+                      final coreR =
+                          lerpDouble(_mapCoreR, _gridCoreR, t)!;
+                      final cPos =
+                          _computeConceptPositions(center, radius);
+
+                      return MouseRegion(
+                        // Defer to underlying layer when not over a node
+                        cursor: _hoveredPentagramId != null
+                            ? _pentagramCursor
+                            : MouseCursor.defer,
+                        opaque: false,
+                        onHover: (e) => _handleHover(
+                            e, center, cPos, nodeR, coreR, isGridMode, state),
+                        onExit: (_) => _handleHoverExit(),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onTapUp: (d) => _handleTap(
+                              d, center, cPos, nodeR, coreR, isGridMode),
+                          child: RepaintBoundary(
+                            child: CustomPaint(
+                              painter: PentagramPainter(
+                                conceptPositions: cPos,
+                                center: center,
+                                activeEndings: state.activeEndingSet,
+                                unlockOrder: state.unlockOrder,
+                                animProgress: _threadCtrl.value,
+                                showCore: state.allEndingsUnlocked,
+                                hoveredId: _hoveredPentagramId,
+                                elapsed: _elapsed,
+                                activeToolIndex: state.activeTool,
+                                nodeRadius: nodeR,
+                                coreRadius: coreR,
+                              ),
+                              size: s,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
+                // ── Layer 3: Dev Auto-Complete FAB (bottom-right) ─────────────
+                Positioned(
+                  bottom: 24.0,
+                  right: 24.0,
+                  child: _DevAutoCompleteFAB(
+                    onTap: () => Provider.of<GridState>(context, listen: false)
+                        .devAutoComplete(),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
   }
 }
 
-// ---------------------------------------------------------------------------
-// _AppTabBar — pill-style floating selector
-// ---------------------------------------------------------------------------
-class _AppTabBar extends StatelessWidget {
-  final int currentScreen;
-  final void Function(int) onTap;
+// ═══════════════════════════════════════════════════════════════════════════
+// _DevAutoCompleteFAB — DEV ONLY: instantly activates all 5 endings
+// ═══════════════════════════════════════════════════════════════════════════
+class _DevAutoCompleteFAB extends StatefulWidget {
+  final VoidCallback onTap;
+  const _DevAutoCompleteFAB({required this.onTap});
 
-  const _AppTabBar({required this.currentScreen, required this.onTap});
+  @override
+  State<_DevAutoCompleteFAB> createState() => _DevAutoCompleteFABState();
+}
+
+class _DevAutoCompleteFABState extends State<_DevAutoCompleteFAB> {
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(3.0),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-      ),
-      child: Stack(
-        children: [
-          // Sliding active indicator
-          AnimatedAlign(
-            duration: AppDurations.normal,
-            curve: Curves.easeInOutCubic,
-            alignment: currentScreen == 0
-                ? Alignment.centerLeft
-                : Alignment.centerRight,
-            child: FractionallySizedBox(
-              widthFactor: 0.5,
-              child: Container(
-                height: 34.0,
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceHigh,
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                ),
-              ),
-            ),
-          ),
-          // Tab buttons (on top of indicator)
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _TabButton(
-                label: 'Phase 1 · Map',
-                isSelected: currentScreen == 0,
-                onTap: () => onTap(0),
-              ),
-              _TabButton(
-                label: 'Phase 2 · Grid',
-                isSelected: currentScreen == 1,
-                onTap: () => onTap(1),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: AppDurations.fast,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+          decoration: BoxDecoration(
+            color: _hovered ? AppColors.surfaceHigh : AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TabButton extends StatelessWidget {
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _TabButton({
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: SizedBox(
-        width: 140.0,
-        height: 34.0,
-        child: Center(
-          child: AnimatedDefaultTextStyle(
-            duration: AppDurations.fast,
-            style: GoogleFonts.inter(
-              fontSize: 12.5,
-              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-              color: isSelected ? AppColors.textPrimary : AppColors.textMuted,
-            ),
-            child: Text(label),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.auto_fix_high_rounded,
+                color: AppColors.textMuted,
+                size: 14.0,
+              ),
+              const SizedBox(width: 7.0),
+              Text(
+                'Auto Complete',
+                style: GoogleFonts.inter(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textMuted,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ],
           ),
         ),
       ),

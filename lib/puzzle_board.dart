@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'grid_cell.dart';
 import 'grid_state.dart';
@@ -32,21 +31,46 @@ class PuzzleBoard extends StatelessWidget {
               Selector<GridState, int>(
                 selector: (_, s) => s.activeTool,
                 builder: (context, activeTool, _) {
+                  final toolColors = {
+                    1: AppColors.conceptPurple,
+                    2: AppColors.conceptBlue,
+                    3: AppColors.conceptTeal,
+                    4: AppColors.conceptOrange,
+                    5: AppColors.conceptRose,
+                  };
+                  final toolColor = toolColors[activeTool];
                   final label = activeTool == 0
-                      ? 'Stabilization Active'
-                      : activeTool == 6
-                          ? 'Semantic Core Active'
-                          : 'Decryptor Tool $activeTool Active';
+                      ? 'Select a vertex on the Map'
+                      : ['Color', 'Mod 36', 'Balance', 'Adjacent', 'Symmetry']
+                              [activeTool - 1]
+                          .toUpperCase();
                   return AnimatedSwitcher(
                     duration: AppDurations.fast,
-                    child: Text(
-                      label.toUpperCase(),
+                    child: Row(
                       key: ValueKey(activeTool),
-                      style: AppTextStyles.caption(
-                        color: activeTool > 0
-                            ? AppColors.textSecondary
-                            : AppColors.textMuted,
-                      ),
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (toolColor != null) ...
+                          [
+                            Container(
+                              width: 6.0,
+                              height: 6.0,
+                              decoration: BoxDecoration(
+                                color: toolColor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 7.0),
+                          ],
+                        Text(
+                          label,
+                          style: AppTextStyles.caption(
+                            color: activeTool > 0
+                                ? AppColors.textSecondary
+                                : AppColors.textMuted,
+                          ),
+                        ),
+                      ],
                     ),
                   );
                 },
@@ -55,19 +79,6 @@ class PuzzleBoard extends StatelessWidget {
           ),
         ),
 
-        // ── Tool Selector ─────────────────────────────────────────────────
-        Selector<GridState, int>(
-          selector: (_, s) => s.activeTool,
-          builder: (context, activeTool, _) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 14.0),
-              child: _ToolSelector(
-                activeTool: activeTool,
-                onSelect: state.setActiveTool,
-              ),
-            );
-          },
-        ),
 
         // ── Board ────────────────────────────────────────────────────────
         Expanded(
@@ -271,68 +282,6 @@ class PuzzleBoard extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// _ToolSelector — horizontal scrolling pill group with animated indicator
-// ---------------------------------------------------------------------------
-class _ToolSelector extends StatelessWidget {
-  final int activeTool;
-  final void Function(int) onSelect;
-
-  const _ToolSelector({required this.activeTool, required this.onSelect});
-
-  static const List<String> _labels = [
-    'None', 'Color', 'Mod 36', 'Balance', 'Adjacent', 'Symmetry', 'Semantic',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Container(
-        padding: const EdgeInsets.all(3.0),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(_labels.length, (i) {
-            final isSelected = activeTool == i;
-            return GestureDetector(
-              onTap: () => onSelect(i),
-              behavior: HitTestBehavior.opaque,
-              child: AnimatedContainer(
-                duration: AppDurations.normal,
-                curve: Curves.easeInOutCubic,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14.0, vertical: 8.0),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? AppColors.surfaceHigh
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                ),
-                child: AnimatedDefaultTextStyle(
-                  duration: AppDurations.fast,
-                  style: GoogleFonts.inter(
-                    fontSize: 12.0,
-                    fontWeight:
-                        isSelected ? FontWeight.w700 : FontWeight.w500,
-                    color: isSelected
-                        ? AppColors.textPrimary
-                        : AppColors.textMuted,
-                  ),
-                  child: Text(_labels[i]),
-                ),
-              ),
-            );
-          }),
-        ),
-      ),
-    );
-  }
-}
 
 // ---------------------------------------------------------------------------
 // RowHandleState / ColHandleState

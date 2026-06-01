@@ -23,12 +23,16 @@ class GridState extends ChangeNotifier {
   int? _draggingRowIndex;
   int? _draggingColIndex;
 
-  // Map Screen state
+  // Map Screen — blob nodes
   List<MapNode> _nodes = [];
   List<MapConnection> _connections = [];
 
   // Master connections list loaded from Supabase
   List<Map<String, dynamic>> _masterConnections = [];
+
+  // Pentagram ending state
+  final Set<String> _activeEndings = {};
+  final List<String> _unlockOrder = []; // concepts in order of discovery
 
   // Getters
   int get currentScreen => _currentScreen;
@@ -49,6 +53,12 @@ class GridState extends ChangeNotifier {
   List<MapConnection> get connections => _connections;
   List<Map<String, dynamic>> get masterConnections => _masterConnections;
 
+  // Ending / pentagram getters
+  bool isEndingActive(String concept) => _activeEndings.contains(concept);
+  Set<String> get activeEndingSet => Set.unmodifiable(_activeEndings);
+  List<String> get unlockOrder => List.unmodifiable(_unlockOrder);
+  bool get allEndingsUnlocked => _unlockOrder.length == 5;
+
   GridCell getCellById(String id) {
     return _cells.firstWhere((cell) => cell.id == id);
   }
@@ -66,6 +76,30 @@ class GridState extends ChangeNotifier {
       _currentScreen = index;
       notifyListeners();
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ending state management
+  // ---------------------------------------------------------------------------
+
+  /// Activates a pentagram ending node by concept ID ('c1'–'c5').
+  void activateEnding(String concept) {
+    if (_activeEndings.contains(concept)) return;
+    _activeEndings.add(concept);
+    _unlockOrder.add(concept);
+    notifyListeners();
+  }
+
+  /// DEV-ONLY: instantly activate all 5 endings in a random order.
+  void devAutoComplete() {
+    const concepts = ['c1', 'c2', 'c3', 'c4', 'c5'];
+    final remaining = concepts.where((c) => !_activeEndings.contains(c)).toList()
+      ..shuffle();
+    for (final c in remaining) {
+      _activeEndings.add(c);
+      _unlockOrder.add(c);
+    }
+    notifyListeners();
   }
 
   // Query and fetch the master connections list from Supabase
@@ -160,18 +194,10 @@ class GridState extends ChangeNotifier {
 
       // Valid Code: Extract fields
       final String itemId = response['item_id'] ?? '';
-      final String title = response['title'] ?? '';
+      final String title  = response['title']   ?? '';
       final String concept = response['concept'] ?? '';
 
-      // Check if already mapped
-      if (_nodes.any((n) => n.id == itemId)) {
-        if (context.mounted) {
-          _showToast(context, 'Already mapped: $title', AppColors.textMuted);
-        }
-        return;
-      }
-
-      // Map concept strings to visual accent colors
+      // Map concept to accent color (used for both endings and blobs)
       Color conceptColor = AppColors.textMuted;
       switch (concept.toLowerCase()) {
         case 'c1': conceptColor = AppColors.conceptPurple; break;
@@ -179,6 +205,30 @@ class GridState extends ChangeNotifier {
         case 'c3': conceptColor = AppColors.conceptTeal;   break;
         case 'c4': conceptColor = AppColors.conceptOrange; break;
         case 'c5': conceptColor = AppColors.conceptRose;   break;
+      }
+
+      // ── Ending path: activate pentagram node, skip blob spawn ─────────────
+      final bool isEnding = response['is_ending'] == true;
+      if (isEnding) {
+        if (_activeEndings.contains(concept)) {
+          if (context.mounted) {
+            _showToast(context, 'Ending already discovered', AppColors.textMuted);
+          }
+          return;
+        }
+        activateEnding(concept);
+        if (context.mounted) {
+          _showToast(context, 'Ending discovered: $title', conceptColor);
+        }
+        return;
+      }
+
+      // ── Regular item path: spawn as floating blob ─────────────────────────
+      if (_nodes.any((n) => n.id == itemId)) {
+        if (context.mounted) {
+          _showToast(context, 'Already mapped: $title', AppColors.textMuted);
+        }
+        return;
       }
 
       // Semi-random spawn near canvas center
@@ -194,10 +244,7 @@ class GridState extends ChangeNotifier {
       );
 
       _nodes.add(newNode);
-
-      // Check connections (both directions, no duplicates)
       _checkAndAddConnections(itemId);
-
       notifyListeners();
 
       if (context.mounted) {

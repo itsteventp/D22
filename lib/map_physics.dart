@@ -54,24 +54,19 @@ class BlobPhysicsSimulator {
   // Sync nodes: add new nodes, remove stale ones
   // ---------------------------------------------------------------------------
   void sync(List<MapNode> nodes, Size canvasSize) {
-    // Add new
+    // Register new nodes, initialize their physics state at spawn position
     for (final node in nodes) {
       if (!_physics.containsKey(node.id)) {
-        final radius = _radiusForTitle(node.title);
         _physics[node.id] = MapNodePhysics(
           nodeId: node.id,
           position: node.position,
-          radius: radius,
+          radius: _radiusForTitle(node.title),
         );
-      } else {
-        // If the node position was updated externally (drag pinned) sync it
-        if (_physics[node.id]!.isPinned) {
-          _physics[node.id]!.position = node.position;
-        }
       }
+      // Drag is handled directly via pinNode()/moveNode() — no sync needed
     }
 
-    // Remove stale
+    // Remove stale entries for nodes removed from GridState
     final liveIds = nodes.map((n) => n.id).toSet();
     _physics.removeWhere((id, _) => !liveIds.contains(id));
   }
