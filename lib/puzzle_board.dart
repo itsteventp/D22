@@ -12,14 +12,13 @@ class PuzzleBoard extends StatelessWidget {
   static const double cellSpacing = 8.0;
   static const double handleSize = 32.0;
 
+  // Muted professional semantic colors (Shadcn style)
+  static const Color colorSuccess = Color(0xFF10B981); // Emerald 500
+  static const Color colorError = Color(0xFFF43F5E); // Rose 500
+
   @override
   Widget build(BuildContext context) {
-    // Read state without listening to prevent rebuilds of the entire board
     final state = Provider.of<GridState>(context, listen: false);
-
-    // Calculate exact board dimensions
-    final double totalWidth = handleSize + 6 * (cellWidth + cellSpacing) + 16.0;
-    final double totalHeight = handleSize + 8 * (cellHeight + cellSpacing) + 16.0;
 
     return Scaffold(
       backgroundColor: const Color(0xFF09090B), // Zinc 950
@@ -28,7 +27,7 @@ class PuzzleBoard extends StatelessWidget {
           children: [
             // Shadcn Title Header
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24.0, horizontal: 16.0),
+              padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 16.0),
               child: Column(
                 children: [
                   const Text(
@@ -41,15 +40,17 @@ class PuzzleBoard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 6.0),
-                  Selector<GridState, bool>(
-                    selector: (_, s) => s.isCharacterMode,
-                    builder: (context, isCharMode, _) {
+                  Selector<GridState, int>(
+                    selector: (_, s) => s.activeTool,
+                    builder: (context, activeTool, _) {
+                      String subText = "STABILIZATION ACTIVE";
+                      if (activeTool > 0) {
+                        subText = "DECRYPTOR TOOL $activeTool ACTIVE";
+                      }
                       return Text(
-                        isCharMode
-                            ? "DECIPHER MODE"
-                            : "STABILIZATION MODE",
+                        subText,
                         style: TextStyle(
-                          color: isCharMode ? const Color(0xFFA1A1AA) : const Color(0xFF71717A),
+                          color: activeTool == 6 ? const Color(0xFFA1A1AA) : const Color(0xFF71717A),
                           fontSize: 11.0,
                           fontWeight: FontWeight.w500,
                           letterSpacing: 1.5,
@@ -61,131 +62,255 @@ class PuzzleBoard extends StatelessWidget {
               ),
             ),
 
+            // Minimalist Tool Selector UI (Row of Custom Segmented Buttons)
+            Selector<GridState, int>(
+              selector: (_, s) => s.activeTool,
+              builder: (context, activeTool, _) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 16.0),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(7, (index) {
+                        final isSelected = activeTool == index;
+                        final String label = index == 0 ? "None" : "Tool $index";
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                          child: GestureDetector(
+                            onTap: () => state.setActiveTool(index),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+                              decoration: BoxDecoration(
+                                color: isSelected ? Colors.white : Colors.transparent,
+                                border: Border.all(
+                                  color: isSelected ? Colors.white : const Color(0xFF27272A),
+                                  width: 1.0,
+                                ),
+                                borderRadius: BorderRadius.circular(6.0),
+                              ),
+                              child: Text(
+                                label,
+                                style: TextStyle(
+                                  color: isSelected ? Colors.black : const Color(0xFFA1A1AA),
+                                  fontSize: 12.0,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                );
+              },
+            ),
+
             // Board Container
             Expanded(
               child: Center(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.vertical,
-                    child: GestureDetector(
-                      onTap: () => state.clearSelection(),
-                      child: Container(
-                        width: totalWidth,
-                        height: totalHeight,
-                        margin: const EdgeInsets.all(16.0),
-                        padding: const EdgeInsets.all(8.0),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF09090B),
-                          borderRadius: BorderRadius.circular(8.0),
-                          border: Border.all(
-                            color: const Color(0xFF27272A), // Zinc 800
-                            width: 1.0,
-                          ),
-                        ),
-                        child: Stack(
-                          children: [
-                            // 1. Grid Background lines / place slots (visual support)
-                            ...List.generate(8, (r) {
-                              return List.generate(6, (c) {
-                                final double x = handleSize + c * (cellWidth + cellSpacing);
-                                final double y = handleSize + r * (cellHeight + cellSpacing);
-                                return Positioned(
-                                  left: x,
-                                  top: y,
-                                  child: Container(
-                                    width: cellWidth,
-                                    height: cellHeight,
-                                    decoration: BoxDecoration(
-                                      color: Colors.transparent,
-                                      borderRadius: BorderRadius.circular(6.0),
-                                      border: Border.all(
-                                        color: const Color(0xFF18181B), // Zinc 900
-                                        width: 1.0,
+                child: Selector<GridState, int>(
+                  selector: (_, s) => s.activeTool,
+                  builder: (context, activeTool, child) {
+                    // Compute size dynamically depending on active tool extras
+                    // Tool 2 adds a row footer at the bottom
+                    // Tool 3 adds a column header/indicator at the far right
+                    final double totalWidth = handleSize + 6 * (cellWidth + cellSpacing) + (activeTool == 3 ? cellWidth + cellSpacing : 0) + 16.0;
+                    final double totalHeight = handleSize + 8 * (cellHeight + cellSpacing) + (activeTool == 2 ? handleSize + cellSpacing : 0) + 16.0;
+
+                    return SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.vertical,
+                        child: GestureDetector(
+                          onTap: () => state.clearSelection(),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            width: totalWidth,
+                            height: totalHeight,
+                            margin: const EdgeInsets.all(16.0),
+                            padding: const EdgeInsets.all(8.0),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF09090B),
+                              borderRadius: BorderRadius.circular(8.0),
+                              border: Border.all(
+                                color: const Color(0xFF27272A), // Zinc 800
+                                width: 1.0,
+                              ),
+                            ),
+                            child: Stack(
+                              children: [
+                                // 1. Grid Background lines / place slots
+                                ...List.generate(8, (r) {
+                                  return List.generate(6, (c) {
+                                    final double x = handleSize + c * (cellWidth + cellSpacing);
+                                    final double y = handleSize + r * (cellHeight + cellSpacing);
+                                    return Positioned(
+                                      left: x,
+                                      top: y,
+                                      child: Container(
+                                        width: cellWidth,
+                                        height: cellHeight,
+                                        decoration: BoxDecoration(
+                                          color: Colors.transparent,
+                                          borderRadius: BorderRadius.circular(6.0),
+                                          border: Border.all(
+                                            color: const Color(0xFF18181B), // Zinc 900
+                                            width: 1.0,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  });
+                                }).expand((e) => e),
+
+                                // 2. Row Handles (Left Column)
+                                ...List.generate(8, (r) {
+                                  final double x = 0;
+                                  final double y = handleSize + r * (cellHeight + cellSpacing);
+                                  return Positioned(
+                                    left: x,
+                                    top: y,
+                                    child: RowHandleWidget(index: r),
+                                  );
+                                }),
+
+                                // 3. Column Handles (Top Row)
+                                ...List.generate(6, (c) {
+                                  final double x = handleSize + c * (cellWidth + cellSpacing);
+                                  final double y = 0;
+                                  return Positioned(
+                                    left: x,
+                                    top: y,
+                                    child: ColHandleWidget(index: c),
+                                  );
+                                }),
+
+                                // 4. Tool 2 Column Footers
+                                if (activeTool == 2)
+                                  ...List.generate(6, (c) {
+                                    final double x = handleSize + c * (cellWidth + cellSpacing);
+                                    final double y = handleSize + 8 * (cellHeight + cellSpacing);
+                                    final bool isEven = c % 2 == 0;
+                                    return Positioned(
+                                      left: x,
+                                      top: y,
+                                      child: RepaintBoundary(
+                                        child: SizedBox(
+                                          width: cellWidth,
+                                          height: handleSize,
+                                          child: Center(
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 4.0),
+                                              decoration: BoxDecoration(
+                                                color: (isEven ? colorSuccess : colorError).withValues(alpha: 0.1),
+                                                borderRadius: BorderRadius.circular(12.0),
+                                                border: Border.all(
+                                                  color: isEven ? colorSuccess : colorError,
+                                                  width: 1.0,
+                                                ),
+                                              ),
+                                              child: Text(
+                                                isEven ? "0" : "!= 0",
+                                                style: TextStyle(
+                                                  color: isEven ? colorSuccess : colorError,
+                                                  fontSize: 10.0,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontFamily: 'monospace',
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+
+                                // 5. Tool 3 Row Headers (Right Column)
+                                if (activeTool == 3)
+                                  ...List.generate(8, (r) {
+                                    final double x = handleSize + 6 * (cellWidth + cellSpacing);
+                                    final double y = handleSize + r * (cellHeight + cellSpacing);
+                                    final bool isEven = r % 2 == 0;
+                                    return Positioned(
+                                      left: x,
+                                      top: y,
+                                      child: RepaintBoundary(
+                                        child: SizedBox(
+                                          width: cellWidth,
+                                          height: cellHeight,
+                                          child: Center(
+                                            child: Text(
+                                              isEven ? "3L / 3D" : "4L / 2D",
+                                              style: TextStyle(
+                                                color: isEven ? colorSuccess : colorError,
+                                                fontSize: 11.0,
+                                                fontWeight: FontWeight.w600,
+                                                fontFamily: 'monospace',
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+
+                                // 6. Optimized Grid Cells
+                                ...state.cellIds.map((id) {
+                                  return CellPositionedSelector(cellId: id);
+                                }),
+
+                                // 7. Tool 5 Quadrant Symmetry Overlay (Ignore Pointer to avoid blocking interactions)
+                                if (activeTool == 5)
+                                  IgnorePointer(
+                                    child: RepaintBoundary(
+                                      child: Stack(
+                                        children: [
+                                          _buildQuadrantBorder(0, 0, colorSuccess), // Top-Left
+                                          _buildQuadrantBorder(1, 0, colorError),   // Top-Right
+                                          _buildQuadrantBorder(0, 1, colorError),   // Bottom-Left
+                                          _buildQuadrantBorder(1, 1, colorSuccess), // Bottom-Right
+                                        ],
                                       ),
                                     ),
                                   ),
-                                );
-                              });
-                            }).expand((e) => e),
-
-                            // 2. Row Handles (Left Column)
-                            ...List.generate(8, (r) {
-                              final double x = 0;
-                              final double y = handleSize + r * (cellHeight + cellSpacing);
-                              return Positioned(
-                                left: x,
-                                top: y,
-                                child: RowHandleWidget(index: r),
-                              );
-                            }),
-
-                            // 3. Column Handles (Top Row)
-                            ...List.generate(6, (c) {
-                              final double x = handleSize + c * (cellWidth + cellSpacing);
-                              final double y = 0;
-                              return Positioned(
-                                left: x,
-                                top: y,
-                                child: ColHandleWidget(index: c),
-                              );
-                            }),
-
-                            // 4. Optimized Grid Cells
-                            ...state.cellIds.map((id) {
-                              return CellPositionedSelector(cellId: id);
-                            }),
-                          ],
+                              ],
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ),
-
-            // Bottom control switch (Shadcn style)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 32.0),
-              child: Selector<GridState, bool>(
-                selector: (_, s) => s.isCharacterMode,
-                builder: (context, isCharMode, _) {
-                  return OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: isCharMode ? Colors.black : Colors.white,
-                      backgroundColor: isCharMode ? Colors.white : Colors.transparent,
-                      side: const BorderSide(color: Color(0xFF27272A)),
-                      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 14.0),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6.0),
-                      ),
-                    ),
-                    onPressed: () => state.toggleCharacterMode(),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isCharMode ? Icons.visibility : Icons.tune,
-                          size: 16.0,
-                        ),
-                        const SizedBox(width: 8.0),
-                        Text(
-                          isCharMode
-                              ? "ARRANGEMENT MODE"
-                              : "CHARACTER MODE",
-                          style: const TextStyle(
-                            fontSize: 12.0,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 1.0,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // Draw quadrant borders overlay helper
+  Widget _buildQuadrantBorder(int quadX, int quadY, Color color) {
+    final double qWidth = 3 * cellWidth + 2 * cellSpacing + 6.0;
+    final double qHeight = 4 * cellHeight + 3 * cellSpacing + 6.0;
+
+    final double x = handleSize + quadX * 3 * (cellWidth + cellSpacing) - 3.0;
+    final double y = handleSize + quadY * 4 * (cellHeight + cellSpacing) - 3.0;
+
+    return Positioned(
+      left: x,
+      top: y,
+      child: Container(
+        width: qWidth,
+        height: qHeight,
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: color,
+            width: 3.0,
+          ),
+          borderRadius: BorderRadius.circular(8.0),
         ),
       ),
     );
@@ -433,18 +558,18 @@ class _ColHandleWidgetState extends State<ColHandleWidget> {
   }
 }
 
-// --- STATE SPECIFIC FOR CELL SELECTION/DRAG/COORDINATES ---
+// --- STATE SPECIFIC FOR CELL SELECTION/DRAG/COORDINATES/ACTIVE TOOL ---
 class CellRenderState {
   final GridCell cell;
   final bool isSelected;
   final bool isDimmed;
-  final bool isCharacterMode;
+  final int activeTool;
 
   CellRenderState({
     required this.cell,
     required this.isSelected,
     required this.isDimmed,
-    required this.isCharacterMode,
+    required this.activeTool,
   });
 
   @override
@@ -459,13 +584,13 @@ class CellRenderState {
           cell.color == other.cell.color &&
           isSelected == other.isSelected &&
           isDimmed == other.isDimmed &&
-          isCharacterMode == other.isCharacterMode;
+          activeTool == other.activeTool;
 
   @override
-  int get hashCode => Object.hash(cell.currentCol, cell.currentRow, cell.codeText, cell.secretLetter, isSelected, isDimmed, isCharacterMode);
+  int get hashCode => Object.hash(cell.currentCol, cell.currentRow, cell.codeText, cell.secretLetter, isSelected, isDimmed, activeTool);
 }
 
-// --- CELL POSITIONED SELECTOR (RESPONSIBLE FOR SLIDING & REBUILD FILTERING) ---
+// --- CELL POSITIONED SELECTOR ---
 class CellPositionedSelector extends StatelessWidget {
   final String cellId;
   const CellPositionedSelector({super.key, required this.cellId});
@@ -477,7 +602,7 @@ class CellPositionedSelector extends StatelessWidget {
         cell: s.getCellById(cellId),
         isSelected: s.selectedCellId == cellId,
         isDimmed: s.draggingCellId != null && s.draggingCellId != cellId,
-        isCharacterMode: s.isCharacterMode,
+        activeTool: s.activeTool,
       ),
       builder: (context, renderState, _) {
         final cell = renderState.cell;
@@ -496,7 +621,7 @@ class CellPositionedSelector extends StatelessWidget {
             cell: cell,
             isSelected: renderState.isSelected,
             isDimmed: renderState.isDimmed,
-            isCharacterMode: renderState.isCharacterMode,
+            activeTool: renderState.activeTool,
           ),
         );
       },
@@ -509,14 +634,14 @@ class CellInteractionWidget extends StatefulWidget {
   final GridCell cell;
   final bool isSelected;
   final bool isDimmed;
-  final bool isCharacterMode;
+  final int activeTool;
 
   const CellInteractionWidget({
     super.key,
     required this.cell,
     required this.isSelected,
     required this.isDimmed,
-    required this.isCharacterMode,
+    required this.activeTool,
   });
 
   @override
@@ -530,6 +655,7 @@ class _CellInteractionWidgetState extends State<CellInteractionWidget> {
   Widget build(BuildContext context) {
     final state = Provider.of<GridState>(context, listen: false);
     final isActive = widget.isSelected || isHovered;
+    final bool isCharMode = widget.activeTool == 6;
 
     Widget cellContent = RepaintBoundary(
       child: MouseRegion(
@@ -542,7 +668,7 @@ class _CellInteractionWidgetState extends State<CellInteractionWidget> {
       ),
     );
 
-    if (widget.isCharacterMode) {
+    if (isCharMode) {
       return cellContent;
     }
 
@@ -573,22 +699,36 @@ class _CellInteractionWidgetState extends State<CellInteractionWidget> {
     );
   }
 
-  // Purely visual cell layout
+  // Purely visual cell layout with tool placeholder overlays
   Widget _buildCellVisual(bool isActive) {
-    final bool charMode = widget.isCharacterMode;
+    final int tool = widget.activeTool;
+    final bool isChar = tool == 6;
+    final int cellIndex = widget.cell.currentRow * 6 + widget.cell.currentCol;
 
-    // Stark monochromatic shadcn theme color logic
-    final Color bg = charMode
+    // Stark monochromatic colors
+    final Color bg = isChar
         ? Colors.white
         : (isActive ? Colors.white : Colors.black);
 
-    final Color textCol = charMode
+    Color textCol = isChar
         ? Colors.black
         : (isActive ? Colors.black : Colors.white);
 
-    final Color borderCol = charMode
+    Color borderCol = isChar
         ? Colors.white
         : (isActive ? Colors.white : const Color(0xFF27272A)); // Zinc 800
+
+    // Tool 1 Placeholder Logic: Outline border green/red
+    if (tool == 1) {
+      final bool isEven = cellIndex % 2 == 0;
+      borderCol = isEven ? PuzzleBoard.colorSuccess : PuzzleBoard.colorError;
+    }
+
+    // Tool 4 Placeholder Logic: Text color green/red
+    if (tool == 4) {
+      final bool isThird = cellIndex % 3 == 0;
+      textCol = isThird ? PuzzleBoard.colorSuccess : PuzzleBoard.colorError;
+    }
 
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 150),
@@ -604,13 +744,13 @@ class _CellInteractionWidgetState extends State<CellInteractionWidget> {
             borderRadius: BorderRadius.circular(6.0),
             border: Border.all(
               color: borderCol,
-              width: 1.0,
+              width: tool == 1 ? 2.0 : 1.0, // Thicker border for Tool 1
             ),
           ),
           child: Stack(
             children: [
-              // Concept color - subtle 2px left border accent
-              if (!charMode)
+              // Concept color - subtle 2px left border accent (Not in Tool 6)
+              if (!isChar)
                 Positioned(
                   left: 0,
                   top: 0,
@@ -627,13 +767,13 @@ class _CellInteractionWidgetState extends State<CellInteractionWidget> {
                   ),
                 ),
 
-              // Code or Secret Letter text (centered)
+              // Code text / Secret Letter
               Center(
                 child: Text(
-                  charMode ? widget.cell.secretLetter : widget.cell.codeText,
+                  isChar ? widget.cell.secretLetter : widget.cell.codeText,
                   style: TextStyle(
                     color: textCol,
-                    fontSize: charMode ? 14.0 : 12.0,
+                    fontSize: isChar ? 14.0 : 12.0,
                     fontWeight: FontWeight.w600,
                     fontFamily: 'monospace',
                   ),

@@ -13,7 +13,7 @@ void main() {
       ),
     );
 
-    // Verify that the title is rendered.
-    expect(find.text('GRID DECRYPTOR'), findsOneWidget);
+    // Verify that the navigation tabs are rendered.
+    expect(find.text('Phase 1: Map'), findsOneWidget);
   });
 }

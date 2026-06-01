@@ -78,7 +78,7 @@ void main() {
 
     test('Character Mode prevents any swapping operations', () {
       final state = GridState();
-      state.toggleCharacterMode(); // Enable character mode
+      state.setActiveTool(6); // Enable character mode (Tool 6)
 
       final cellA = state.getCellAt(0, 0)!;
       final cellB = state.getCellAt(1, 1)!;
@@ -111,6 +111,22 @@ void main() {
       // Coordinates must be swapped
       expect(state.getCellAt(1, 1)!.id, cellA.id);
       expect(state.getCellAt(0, 0)!.id, cellB.id);
+    });
+
+    test('activeTool transitions update correctly', () {
+      final state = GridState();
+      expect(state.activeTool, 0);
+
+      state.setActiveTool(3);
+      expect(state.activeTool, 3);
+      expect(state.isCharacterMode, isFalse);
+
+      state.setActiveTool(6);
+      expect(state.activeTool, 6);
+      expect(state.isCharacterMode, isTrue);
+
+      state.setActiveTool(99); // invalid value
+      expect(state.activeTool, 6); // unchanged
     });
   });
 }

@@ -1,10 +1,16 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'grid_cell.dart';
+import 'map_node.dart';
 
 class GridState extends ChangeNotifier {
+  // Screens navigation: 0: Map, 1: Grid
+  int _currentScreen = 0;
+
+  // Grid Puzzle state
   List<GridCell> _cells = [];
-  bool _isCharacterMode = false;
+  int _activeTool = 0; // 0: None, 1-6: Tools
 
   // Selected cell/handle for Tap-to-Swap
   String? _selectedCellId;
@@ -16,8 +22,19 @@ class GridState extends ChangeNotifier {
   int? _draggingRowIndex;
   int? _draggingColIndex;
 
+  // Map Screen state
+  List<MapNode> _nodes = [];
+  List<MapConnection> _connections = [];
+
+  // Master connections list loaded from Supabase
+  List<Map<String, dynamic>> _masterConnections = [];
+
+  // Getters
+  int get currentScreen => _currentScreen;
   List<GridCell> get cells => _cells;
-  bool get isCharacterMode => _isCharacterMode;
+  int get activeTool => _activeTool;
+  bool get isCharacterMode => _activeTool == 6;
+
   String? get selectedCellId => _selectedCellId;
   int? get selectedRowIndex => _selectedRowIndex;
   int? get selectedColIndex => _selectedColIndex;
@@ -27,19 +44,218 @@ class GridState extends ChangeNotifier {
 
   List<String> get cellIds => _cells.map((c) => c.id).toList();
 
+  List<MapNode> get nodes => _nodes;
+  List<MapConnection> get connections => _connections;
+  List<Map<String, dynamic>> get masterConnections => _masterConnections;
+
   GridCell getCellById(String id) {
     return _cells.firstWhere((cell) => cell.id == id);
   }
 
   GridState() {
     generateInitialCells();
+    // Start map clean, nodes will be fetched from Supabase
+    _nodes = [];
+    _connections = [];
   }
 
-  void toggleCharacterMode() {
-    _isCharacterMode = !_isCharacterMode;
-    // Clear selection when mode is toggled
-    clearSelection();
+  // Navigation setter
+  void setScreen(int index) {
+    if (index == 0 || index == 1) {
+      _currentScreen = index;
+      notifyListeners();
+    }
+  }
+
+  // Query and fetch the master connections list from Supabase
+  Future<void> fetchMasterConnections() async {
+    try {
+      final response = await Supabase.instance.client
+          .from('item_connections')
+          .select();
+
+      _masterConnections = List<Map<String, dynamic>>.from(response);
+      _rebuildConnections();
+    } catch (e) {
+      if (!e.toString().contains('_isInitialized')) {
+        debugPrint('Error fetching master connections: $e');
+      }
+    }
+  }
+
+  // Helper to re-evaluate and draw lines based on current canvas nodes
+  void _rebuildConnections() {
+    _connections.clear();
+    for (final node in _nodes) {
+      _checkAndAddConnections(node.id);
+    }
     notifyListeners();
+  }
+
+  // Expose connections setter for offline unit tests
+  void setMasterConnectionsForTesting(List<Map<String, dynamic>> connectionsList) {
+    _masterConnections = connectionsList;
+    _rebuildConnections();
+  }
+
+  // Add node manually for testing connections and layout
+  void addNodeForTesting(MapNode node) {
+    _nodes.add(node);
+    _checkAndAddConnections(node.id);
+    notifyListeners();
+  }
+
+  // Check connections in both directions and add if both nodes are present
+  void _checkAndAddConnections(String nodeId) {
+    for (final conn in _masterConnections) {
+      final String? fromItem = conn['from_item'];
+      final String? toItem = conn['to_item'];
+
+      if (fromItem == null || toItem == null) continue;
+
+      if (fromItem == nodeId || toItem == nodeId) {
+        final otherId = fromItem == nodeId ? toItem : fromItem;
+        if (_nodes.any((n) => n.id == otherId)) {
+          // Check both directions to prevent duplicate links
+          final bool alreadyExists = _connections.any((existing) =>
+              (existing.fromId == nodeId && existing.toId == otherId) ||
+              (existing.fromId == otherId && existing.toId == nodeId));
+
+          if (!alreadyExists) {
+            _connections.add(MapConnection(fromId: nodeId, toId: otherId));
+          }
+        }
+      }
+    }
+  }
+
+  // Update node coordinates during drag
+  void updateNodePosition(String id, Offset newOffset) {
+    final index = _nodes.indexWhere((n) => n.id == id);
+    if (index != -1) {
+      _nodes[index] = _nodes[index].copyWith(position: newOffset);
+      notifyListeners();
+    }
+  }
+
+  // Validate entered code against Supabase items table
+  Future<void> submitCode(String enteredCode, BuildContext context) async {
+    final enteredCodeUpper = enteredCode.toUpperCase().trim();
+    if (enteredCodeUpper.isEmpty) return;
+
+    try {
+      final response = await Supabase.instance.client
+          .from('items')
+          .select()
+          .eq('code', enteredCodeUpper)
+          .maybeSingle();
+
+      if (response == null) {
+        // Invalid Code: Clear input and show rose styled SnackBar
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Invalid Code'),
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: Color(0xFFF43F5E), // rose 500
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Valid Code: Extract fields
+      final String itemId = response['item_id'] ?? '';
+      final String title = response['title'] ?? '';
+      final String concept = response['concept'] ?? '';
+
+      // Check if already mapped
+      if (_nodes.any((n) => n.id == itemId)) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Code already mapped'),
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: Color(0xFF71717A), // zinc 500
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Map concept strings to visual accent colors
+      Color conceptColor = Colors.grey;
+      switch (concept.toLowerCase()) {
+        case 'c1':
+          conceptColor = const Color(0xFFAB47BC); // Purple
+          break;
+        case 'c2':
+          conceptColor = const Color(0xFF42A5F5); // Blue
+          break;
+        case 'c3':
+          conceptColor = const Color(0xFF34D399); // Green (emerald 400)
+          break;
+        case 'c4':
+          conceptColor = const Color(0xFFFFA726); // Orange
+          break;
+        case 'c5':
+          conceptColor = const Color(0xFFF43F5E); // Red (rose 400)
+          break;
+      }
+
+      // Semi-random spawn coordinates within view bounds
+      final Random rand = Random();
+      final double rx = 50.0 + rand.nextDouble() * 250.0;
+      final double ry = 50.0 + rand.nextDouble() * 250.0;
+
+      final newNode = MapNode(
+        id: itemId,
+        position: Offset(rx, ry),
+        color: conceptColor,
+        title: title,
+      );
+
+      _nodes.add(newNode);
+
+      // Check connections (both directions, no duplicates)
+      _checkAndAddConnections(itemId);
+
+      notifyListeners();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Code mapped: $title'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: const Color(0xFF10B981), // emerald 500
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error validating code: $e'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: const Color(0xFFF43F5E), // rose 500
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  // Grid Mode Actions
+  void setActiveTool(int tool) {
+    if (tool >= 0 && tool <= 6) {
+      _activeTool = tool;
+      clearSelection();
+      notifyListeners();
+    }
   }
 
   void setDraggingCell(String? cellId) {
@@ -64,7 +280,7 @@ class GridState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Generate initial state
+  // Generate initial grid state
   void generateInitialCells() {
     final Random rand = Random();
     final List<Color> conceptColors = [
@@ -83,7 +299,6 @@ class GridState extends ChangeNotifier {
 
     for (int r = 0; r < 8; r++) {
       for (int c = 0; c < 6; c++) {
-        // Random 6-character codeText (uppercase letters + numbers)
         final String code = List.generate(6, (index) {
           if (rand.nextBool()) {
             return alphabet[rand.nextInt(alphabet.length)];
@@ -92,7 +307,6 @@ class GridState extends ChangeNotifier {
           }
         }).join();
 
-        // Color and letter
         final Color color = conceptColors[rand.nextInt(conceptColors.length)];
         final String letter = alphabet[rand.nextInt(alphabet.length)];
 
@@ -122,7 +336,7 @@ class GridState extends ChangeNotifier {
 
   // Swap Cell A and Cell B
   void swapCells(String idA, String idB) {
-    if (_isCharacterMode) return; // Locked during character mode
+    if (isCharacterMode) return;
     
     int indexA = _cells.indexWhere((c) => c.id == idA);
     int indexB = _cells.indexWhere((c) => c.id == idB);
@@ -131,7 +345,6 @@ class GridState extends ChangeNotifier {
       final cellA = _cells[indexA];
       final cellB = _cells[indexB];
 
-      // Swap their currentCol and currentRow
       _cells[indexA] = cellA.copyWith(
         currentCol: cellB.currentCol,
         currentRow: cellB.currentRow,
@@ -147,7 +360,7 @@ class GridState extends ChangeNotifier {
 
   // Swap Row A and Row B
   void swapRows(int rowA, int rowB) {
-    if (_isCharacterMode) return;
+    if (isCharacterMode) return;
     if (rowA == rowB) return;
 
     for (int col = 0; col < 6; col++) {
@@ -167,7 +380,7 @@ class GridState extends ChangeNotifier {
 
   // Swap Column A and Column B
   void swapCols(int colA, int colB) {
-    if (_isCharacterMode) return;
+    if (isCharacterMode) return;
     if (colA == colB) return;
 
     for (int row = 0; row < 8; row++) {
@@ -187,17 +400,14 @@ class GridState extends ChangeNotifier {
 
   // Handle cell tap
   void handleCellTap(String cellId) {
-    if (_isCharacterMode) return;
+    if (isCharacterMode) return;
 
     if (_selectedCellId == cellId) {
-      // Toggle off if tapped again
       _selectedCellId = null;
     } else if (_selectedCellId != null) {
-      // Swap with previous selected cell
       swapCells(_selectedCellId!, cellId);
       _selectedCellId = null;
     } else {
-      // Select cell and clear handle selection
       _selectedCellId = cellId;
       _selectedRowIndex = null;
       _selectedColIndex = null;
@@ -207,16 +417,14 @@ class GridState extends ChangeNotifier {
 
   // Handle row handle tap
   void handleRowTap(int rowIndex) {
-    if (_isCharacterMode) return;
+    if (isCharacterMode) return;
 
     if (_selectedRowIndex == rowIndex) {
       _selectedRowIndex = null;
     } else if (_selectedRowIndex != null) {
-      // Swap rows
       swapRows(_selectedRowIndex!, rowIndex);
       _selectedRowIndex = null;
     } else {
-      // Select row and clear other selections
       _selectedRowIndex = rowIndex;
       _selectedCellId = null;
       _selectedColIndex = null;
@@ -226,16 +434,14 @@ class GridState extends ChangeNotifier {
 
   // Handle col handle tap
   void handleColTap(int colIndex) {
-    if (_isCharacterMode) return;
+    if (isCharacterMode) return;
 
     if (_selectedColIndex == colIndex) {
       _selectedColIndex = null;
     } else if (_selectedColIndex != null) {
-      // Swap cols
       swapCols(_selectedColIndex!, colIndex);
       _selectedColIndex = null;
     } else {
-      // Select col and clear other selections
       _selectedColIndex = colIndex;
       _selectedCellId = null;
       _selectedRowIndex = null;
