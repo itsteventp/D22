@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'grid_cell.dart';
 import 'grid_state.dart';
 import 'theme.dart';
+import 'widgets/image_gallery_dialog.dart';
 
 class PuzzleBoard extends StatelessWidget {
   const PuzzleBoard({super.key});
@@ -28,52 +29,59 @@ class PuzzleBoard extends StatelessWidget {
                 style: AppTextStyles.display(),
               ),
               const SizedBox(height: 4.0),
-              Selector<GridState, int>(
-                selector: (_, s) => s.activeTool,
-                builder: (context, activeTool, _) {
-                  final toolColors = {
-                    1: AppColors.conceptPurple,
-                    2: AppColors.conceptBlue,
-                    3: AppColors.conceptTeal,
-                    4: AppColors.conceptOrange,
-                    5: AppColors.conceptRose,
-                  };
-                  final toolColor = toolColors[activeTool];
-                  final label = activeTool == 0
-                      ? 'Select a vertex on the Map'
-                      : ['Color', 'Mod 36', 'Balance', 'Adjacent', 'Symmetry']
-                              [activeTool - 1]
-                          .toUpperCase();
-                  return AnimatedSwitcher(
-                    duration: AppDurations.fast,
-                    child: Row(
-                      key: ValueKey(activeTool),
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (toolColor != null) ...
-                          [
-                            Container(
-                              width: 6.0,
-                              height: 6.0,
-                              decoration: BoxDecoration(
-                                color: toolColor,
-                                shape: BoxShape.circle,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Selector<GridState, int>(
+                    selector: (_, s) => s.activeTool,
+                    builder: (context, activeTool, _) {
+                      final toolColors = {
+                        1: AppColors.conceptPurple,
+                        2: AppColors.conceptBlue,
+                        3: AppColors.conceptTeal,
+                        4: AppColors.conceptOrange,
+                        5: AppColors.conceptRose,
+                      };
+                      final toolColor = toolColors[activeTool];
+                      final label = activeTool == 0
+                          ? 'Select a vertex on the Map'
+                          : ['Color', 'Mod 36', 'Balance', 'Adjacent', 'Symmetry']
+                                  [activeTool - 1]
+                              .toUpperCase();
+                      return AnimatedSwitcher(
+                        duration: AppDurations.fast,
+                        child: Row(
+                          key: ValueKey(activeTool),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (toolColor != null) ...[
+                              Container(
+                                width: 6.0,
+                                height: 6.0,
+                                decoration: BoxDecoration(
+                                  color: toolColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 7.0),
+                            ],
+                            Text(
+                              label,
+                              style: AppTextStyles.caption(
+                                color: activeTool > 0
+                                    ? AppColors.textSecondary
+                                    : AppColors.textMuted,
                               ),
                             ),
-                            const SizedBox(width: 7.0),
                           ],
-                        Text(
-                          label,
-                          style: AppTextStyles.caption(
-                            color: activeTool > 0
-                                ? AppColors.textSecondary
-                                : AppColors.textMuted,
-                          ),
                         ),
-                      ],
-                    ),
-                  );
-                },
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 12),
+                  const _LoadImageButton(),
+                ],
               ),
             ],
           ),
@@ -733,6 +741,65 @@ class _CellVisual extends StatelessWidget {
                       size: isChar ? 15.0 : 11.5,
                     ),
                   ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _LoadImageButton — ghost pill in the grid header that opens the image
+// gallery dialog showing all uploaded images from Supabase Storage.
+// ---------------------------------------------------------------------------
+class _LoadImageButton extends StatefulWidget {
+  const _LoadImageButton();
+
+  @override
+  State<_LoadImageButton> createState() => _LoadImageButtonState();
+}
+
+class _LoadImageButtonState extends State<_LoadImageButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: () => showDialog<void>(
+          context: context,
+          builder: (_) => const ImageGalleryDialog(),
+        ),
+        child: AnimatedContainer(
+          duration: AppDurations.fast,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: _hovered ? AppColors.surfaceHigh : AppColors.borderSubtle,
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.photo_library_outlined,
+                size: 11,
+                color: _hovered
+                    ? AppColors.textSecondary
+                    : AppColors.textMuted,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                'load image',
+                style: AppTextStyles.caption(
+                  color: _hovered
+                      ? AppColors.textSecondary
+                      : AppColors.textMuted,
                 ),
               ),
             ],

@@ -34,6 +34,13 @@ class GridState extends ChangeNotifier {
   final Set<String> _activeEndings = {};
   final List<String> _unlockOrder = []; // concepts in order of discovery
 
+  // ── Performance: cache validated items to avoid repeated DB round-trips ──────
+  final Map<String, Map<String, dynamic>> _itemsCache = {};
+  bool _masterConnectionsFetched = false;
+
+  // ── Local session tracking (dev mode — not written to unlocked_codes) ────────
+  final List<Map<String, dynamic>> _localUnlockedCodes = [];
+
   // Getters
   int get currentScreen => _currentScreen;
   List<GridCell> get cells => _cells;
@@ -102,13 +109,16 @@ class GridState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Query and fetch the master connections list from Supabase
+  // Query and fetch the master connections list from Supabase.
+  // Guarded — skips the network call if data is already loaded.
   Future<void> fetchMasterConnections() async {
+    if (_masterConnectionsFetched) return;
     try {
       final response = await Supabase.instance.client
           .from('item_connections')
           .select();
 
+      _masterConnectionsFetched = true;
       _masterConnections = List<Map<String, dynamic>>.from(response);
       _rebuildConnections();
     } catch (e) {
@@ -255,6 +265,110 @@ class GridState extends ChangeNotifier {
       if (context.mounted) {
         _showToast(context, 'Error: $e', AppColors.error);
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // submitCodeWithImage — validates code (with in-memory cache), stores entry
+  // locally. Image path comes from the Storage upload done in the UI layer.
+  // Dev mode: does NOT write to the unlocked_codes table.
+  // ---------------------------------------------------------------------------
+  Future<void> submitCodeWithImage(
+    String enteredCode,
+    String imagePath,
+    BuildContext context,
+  ) async {
+    final upper = enteredCode.toUpperCase().trim();
+    if (upper.isEmpty) return;
+
+    // Try in-memory cache first — zero DB cost on repeat lookups
+    Map<String, dynamic>? item = _itemsCache[upper];
+    if (item == null) {
+      try {
+        final response = await Supabase.instance.client
+            .from('items')
+            .select()
+            .eq('code', upper)
+            .maybeSingle();
+
+        if (response == null) {
+          if (context.mounted) {
+            _showToast(context, 'Invalid code', AppColors.error);
+          }
+          return;
+        }
+        _itemsCache[upper] = Map<String, dynamic>.from(response);
+        item = _itemsCache[upper]!;
+      } catch (e) {
+        if (context.mounted) {
+          _showToast(context, 'Error: $e', AppColors.error);
+        }
+        return;
+      }
+    }
+
+    final String itemId  = item['item_id'] ?? '';
+    final String title   = item['title']   ?? '';
+    final String concept = item['concept'] ?? '';
+    final bool isEnding  = item['is_ending'] == true;
+
+    Color conceptColor = AppColors.textMuted;
+    switch (concept.toLowerCase()) {
+      case 'c1': conceptColor = AppColors.conceptPurple; break;
+      case 'c2': conceptColor = AppColors.conceptBlue;   break;
+      case 'c3': conceptColor = AppColors.conceptTeal;   break;
+      case 'c4': conceptColor = AppColors.conceptOrange; break;
+      case 'c5': conceptColor = AppColors.conceptRose;   break;
+    }
+
+    // ── Ending path ───────────────────────────────────────────────────────────
+    if (isEnding) {
+      if (_activeEndings.contains(concept)) {
+        if (context.mounted) {
+          _showToast(context, 'Ending already discovered', AppColors.textMuted);
+        }
+        return;
+      }
+      activateEnding(concept);
+      _localUnlockedCodes.add({
+        'item_id': itemId,
+        'unlocked_at': DateTime.now().toIso8601String(),
+        'image_path': imagePath,
+      });
+      if (context.mounted) {
+        _showToast(context, 'Ending discovered: $title', conceptColor);
+      }
+      return;
+    }
+
+    // ── Regular item: spawn as floating blob ──────────────────────────────────
+    if (_nodes.any((n) => n.id == itemId)) {
+      if (context.mounted) {
+        _showToast(context, 'Already mapped: $title', AppColors.textMuted);
+      }
+      return;
+    }
+
+    final Random rand = Random();
+    _nodes.add(MapNode(
+      id: itemId,
+      position: Offset(
+        120.0 + rand.nextDouble() * 300.0,
+        100.0 + rand.nextDouble() * 220.0,
+      ),
+      color: conceptColor,
+      title: title,
+    ));
+    _checkAndAddConnections(itemId);
+    _localUnlockedCodes.add({
+      'item_id': itemId,
+      'unlocked_at': DateTime.now().toIso8601String(),
+      'image_path': imagePath,
+    });
+    notifyListeners();
+
+    if (context.mounted) {
+      _showToast(context, 'Mapped: $title', AppColors.success);
     }
   }
 
@@ -499,5 +613,27 @@ class GridState extends ChangeNotifier {
       _selectedRowIndex = null;
     }
     notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // fetchAllImagePaths — lists all uploaded images from Supabase Storage.
+  // Returns public URLs ready for Image.network.
+  // ---------------------------------------------------------------------------
+  Future<List<String>> fetchAllImagePaths() async {
+    try {
+      final files = await Supabase.instance.client.storage
+          .from('unlocked_images')
+          .list();
+
+      return files
+          .where((f) => f.name.isNotEmpty && !f.name.startsWith('.'))
+          .map((f) => Supabase.instance.client.storage
+              .from('unlocked_images')
+              .getPublicUrl(f.name))
+          .toList();
+    } catch (e) {
+      debugPrint('Error fetching image paths: $e');
+      return [];
+    }
   }
 }
