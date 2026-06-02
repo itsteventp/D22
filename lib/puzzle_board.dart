@@ -559,12 +559,16 @@ class CellRenderState {
   final bool isSelected;
   final bool isDimmed;
   final int activeTool;
+  final int revealedCount;
+  final bool isProgressiveLoading;
 
   const CellRenderState({
     required this.cell,
     required this.isSelected,
     required this.isDimmed,
     required this.activeTool,
+    required this.revealedCount,
+    required this.isProgressiveLoading,
   });
 
   @override
@@ -578,12 +582,15 @@ class CellRenderState {
           cell.color == other.cell.color &&
           isSelected == other.isSelected &&
           isDimmed == other.isDimmed &&
-          activeTool == other.activeTool;
+          activeTool == other.activeTool &&
+          revealedCount == other.revealedCount &&
+          isProgressiveLoading == other.isProgressiveLoading;
 
   @override
   int get hashCode => Object.hash(
         cell.currentCol, cell.currentRow, cell.codeText,
         cell.secretLetter, isSelected, isDimmed, activeTool,
+        revealedCount, isProgressiveLoading,
       );
 }
 
@@ -602,6 +609,8 @@ class CellPositionedSelector extends StatelessWidget {
         isSelected: s.selectedCellId == cellId,
         isDimmed: s.draggingCellId != null && s.draggingCellId != cellId,
         activeTool: s.activeTool,
+        revealedCount: s.revealedCount,
+        isProgressiveLoading: s.isProgressiveLoading,
       ),
       builder: (context, rs, _) {
         final x = PuzzleBoard.handleSize +
@@ -726,11 +735,16 @@ class _CellVisual extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final state = Provider.of<GridState>(context, listen: false);
+    final int slotIndex = cell.currentRow * 6 + cell.currentCol;
+    final bool isProgressiveHidden = state.isProgressiveLoading && slotIndex >= state.revealedCount;
+    final bool isEmptySlot = isProgressiveHidden || cell.codeText.isEmpty;
+
     final isChar  = activeTool == 6;
 
     // Tool 1 — valid HEX coloring
     Color? hexColor;
-    if (activeTool == 1) {
+    if (activeTool == 1 && !isEmptySlot) {
       final upperCode = cell.codeText.toUpperCase().trim();
       final validHexCodes = {'B17A41', '9BC8E2', 'ABCA43', 'DDD1D2', 'D6A371', 'B48EF1'};
       if (validHexCodes.contains(upperCode)) {
@@ -739,21 +753,25 @@ class _CellVisual extends StatelessWidget {
     }
 
     // Background color
-    final bg = isChar
-        ? AppColors.textPrimary
-        : (activeTool == 1 && hexColor != null
-            ? hexColor
-            : (isActive ? AppColors.textPrimary : AppColors.surfaceHigh));
+    final bg = isEmptySlot
+        ? AppColors.surfaceHigh
+        : (isChar
+            ? AppColors.textPrimary
+            : (activeTool == 1 && hexColor != null
+                ? hexColor
+                : (isActive ? AppColors.textPrimary : AppColors.surfaceHigh)));
 
     // Text color
-    Color textCol = isChar
-        ? AppColors.background
-        : (activeTool == 1 && hexColor != null
+    Color textCol = isEmptySlot
+        ? Colors.transparent
+        : (isChar
             ? AppColors.background
-            : (isActive ? AppColors.background : AppColors.textPrimary));
+            : (activeTool == 1 && hexColor != null
+                ? AppColors.background
+                : (isActive ? AppColors.background : AppColors.textPrimary)));
 
     // Tool 4 — adjacency text coloring
-    if (activeTool == 4) {
+    if (activeTool == 4 && !isEmptySlot) {
       final isValid = checkAdjacency(context, cell);
       textCol = isValid ? AppColors.success : AppColors.error;
     }
@@ -770,7 +788,7 @@ class _CellVisual extends StatelessWidget {
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(AppRadius.sm),
-            boxShadow: isActive
+            boxShadow: (isActive && !isEmptySlot)
                 ? [
                     BoxShadow(
                       color: (isChar ? AppColors.textPrimary : cell.color)
@@ -783,7 +801,7 @@ class _CellVisual extends StatelessWidget {
           ),
           child: Center(
             child: Text(
-              isChar ? cell.secretLetter : cell.codeText,
+              isEmptySlot ? '' : (isChar ? cell.secretLetter : cell.codeText),
               style: AppTextStyles.code(
                 color: textCol,
                 size: isChar ? 12.0 : 8.5,

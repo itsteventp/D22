@@ -69,5 +69,18 @@ void main() {
       state.setScreen(9); // invalid value
       expect(state.currentScreen, 1); // unchanged
     });
+
+    test('Ending activation updates ending state but does not add regular nodes', () {
+      final state = GridState();
+      
+      expect(state.activeEndingSet.isEmpty, isTrue);
+      expect(state.unlockOrder.isEmpty, isTrue);
+      expect(state.nodes.isEmpty, isTrue);
+
+      state.activateEnding('c1');
+      expect(state.isEndingActive('c1'), isTrue);
+      expect(state.unlockOrder.contains('c1'), isTrue);
+      expect(state.nodes.isEmpty, isTrue); // endings should not spawn blobs
+    });
   });
 }

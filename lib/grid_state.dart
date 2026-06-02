@@ -1,3 +1,4 @@
+import 'dart:async' show Timer;
 import 'dart:convert' show jsonEncode, jsonDecode;
 import 'dart:html' as html;
 import 'dart:math';
@@ -8,6 +9,14 @@ import 'map_node.dart';
 import 'theme.dart';
 
 class GridState extends ChangeNotifier {
+  static const Set<String> _endingCodes = {
+    'DDD1D2',
+    '1CLMF1',
+    '5FY414',
+    'HLM832',
+    '7C7DM1',
+  };
+
   // Screens navigation: 0: Map, 1: Grid
   int _currentScreen = 0;
 
@@ -28,6 +37,16 @@ class GridState extends ChangeNotifier {
   // Map Screen — blob nodes
   List<MapNode> _nodes = [];
   List<MapConnection> _connections = [];
+
+  // Chronological unlocked items
+  List<String> _chronologicalUnlockedItemIds = [];
+
+  // Progressive loading animation state
+  int _revealedCount = 0;
+  bool _isProgressiveLoading = false;
+
+  int get revealedCount => _revealedCount;
+  bool get isProgressiveLoading => _isProgressiveLoading;
 
   // Master connections list loaded from Supabase
   List<Map<String, dynamic>> _masterConnections = [];
@@ -161,11 +180,19 @@ class GridState extends ChangeNotifier {
           .select()
           .eq('user_id', user.id);
 
+      final unlockedList = List<Map<String, dynamic>>.from(unlockedResponse);
+      unlockedList.sort((a, b) {
+        final aTime = DateTime.tryParse(a['unlocked_at'] ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = DateTime.tryParse(b['unlocked_at'] ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return aTime.compareTo(bTime);
+      });
+      _chronologicalUnlockedItemIds = unlockedList.map((u) => u['item_id'].toString()).toList();
+
       _nodes.clear();
       _activeEndings.clear();
       _unlockOrder.clear();
 
-      for (final unlock in unlockedResponse) {
+      for (final unlock in unlockedList) {
         final itemId = unlock['item_id'];
 
         final item = _itemsCache.values.firstWhere(
@@ -177,7 +204,7 @@ class GridState extends ChangeNotifier {
 
         final concept = item['concept'] ?? '';
         final String title = item['title'] ?? '';
-        final bool isEnding = item['is_ending'] == true;
+        final bool isEnding = _endingCodes.contains(item['code']?.toString().toUpperCase() ?? '');
 
         Color conceptColor = AppColors.textMuted;
         switch (concept.toLowerCase()) {
@@ -197,7 +224,7 @@ class GridState extends ChangeNotifier {
             id: itemId,
             position: Offset(
               120.0 + rand.nextDouble() * 300.0,
-              100.0 + rand.nextDouble() * 220.0,
+              160.0 + rand.nextDouble() * 180.0,
             ),
             color: conceptColor,
             title: title,
@@ -291,6 +318,7 @@ class GridState extends ChangeNotifier {
     if (_activeEndings.contains(concept)) return;
     _activeEndings.add(concept);
     _unlockOrder.add(concept);
+    _rebuildConnections();
     notifyListeners();
   }
 
@@ -303,7 +331,128 @@ class GridState extends ChangeNotifier {
       _activeEndings.add(c);
       _unlockOrder.add(c);
     }
+    _rebuildConnections();
     notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dev Actions
+  // ---------------------------------------------------------------------------
+
+  Future<void> eraseAllData() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    try {
+      await Supabase.instance.client.from('unlocked_codes').delete().eq('user_id', user.id);
+      await Supabase.instance.client.from('game_state').delete().eq('user_id', user.id);
+      
+      _activeEndings.clear();
+      _unlockOrder.clear();
+      _nodes.clear();
+      _connections.clear();
+      _chronologicalUnlockedItemIds.clear();
+      _startDate = null;
+      generateInitialCells();
+      _currentScreen = 0;
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error erasing data: $e');
+    }
+  }
+
+  Future<void> loadAllData() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    try {
+      final List<Map<String, dynamic>> inserts = [];
+      for (final item in _itemsCache.values) {
+        inserts.add({
+          'user_id': user.id,
+          'item_id': item['item_id'],
+          'image_path': '',
+        });
+      }
+      await Supabase.instance.client.from('unlocked_codes').upsert(inserts, onConflict: 'user_id,item_id');
+      await loadStateFromSupabase();
+    } catch (e) {
+      debugPrint('Error loading all data: $e');
+    }
+  }
+
+  void deleteGridCodes() {
+    _cells = _cells.map((cell) => cell.copyWith(
+      codeText: '',
+      color: Colors.transparent,
+      secretLetter: '',
+    )).toList();
+    _revealedCount = 0;
+    notifyListeners();
+    syncGameStateToSupabase();
+  }
+
+  void startProgressiveLoad() {
+    _revealedCount = 0;
+    _isProgressiveLoading = true;
+    
+    final List<GridCell> newCells = [];
+    const String alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    final Random rand = Random();
+    
+    for (int r = 0; r < 8; r++) {
+      for (int c = 0; c < 6; c++) {
+        final int index = r * 6 + c;
+        String code = '';
+        Color color = AppColors.surfaceHigh;
+        String letter = alphabet[rand.nextInt(alphabet.length)];
+        
+        if (index < _chronologicalUnlockedItemIds.length) {
+          final itemId = _chronologicalUnlockedItemIds[index];
+          final item = _itemsCache.values.firstWhere(
+            (i) => i['item_id'] == itemId,
+            orElse: () => {},
+          );
+          if (item.isNotEmpty) {
+            code = item['code'] ?? '';
+            final concept = item['concept'] ?? '';
+            letter = item['secret_letter'] ?? '';
+            
+            switch (concept.toLowerCase()) {
+              case 'c1': color = AppColors.conceptPurple; break;
+              case 'c2': color = AppColors.conceptBlue;   break;
+              case 'c3': color = AppColors.conceptTeal;   break;
+              case 'c4': color = AppColors.conceptOrange; break;
+              case 'c5': color = AppColors.conceptRose;   break;
+            }
+          }
+        }
+        
+        newCells.add(GridCell(
+          id: 'cell_${r}_$c',
+          currentCol: c,
+          currentRow: r,
+          codeText: code,
+          color: color,
+          secretLetter: letter,
+        ));
+      }
+    }
+    
+    _cells = newCells;
+    notifyListeners();
+    
+    Timer.periodic(const Duration(milliseconds: 100), (timer) {
+      if (!_isProgressiveLoading) {
+        timer.cancel();
+        return;
+      }
+      _revealedCount++;
+      if (_revealedCount >= 48) {
+        _isProgressiveLoading = false;
+        timer.cancel();
+        syncGameStateToSupabase();
+      }
+      notifyListeners();
+    });
   }
 
   // Query and fetch the master connections list from Supabase.
@@ -347,6 +496,22 @@ class GridState extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _isItemActive(String itemId) {
+    if (_nodes.any((n) => n.id == itemId)) return true;
+    final item = _itemsCache.values.firstWhere(
+      (i) => i['item_id'] == itemId,
+      orElse: () => {},
+    );
+    if (item.isNotEmpty) {
+      final String concept = item['concept'] ?? '';
+      final String code = item['code']?.toString().toUpperCase() ?? '';
+      if (_endingCodes.contains(code)) {
+        return _activeEndings.contains(concept);
+      }
+    }
+    return false;
+  }
+
   // Check connections in both directions and add if both nodes are present
   void _checkAndAddConnections(String nodeId) {
     for (final conn in _masterConnections) {
@@ -357,7 +522,7 @@ class GridState extends ChangeNotifier {
 
       if (fromItem == nodeId || toItem == nodeId) {
         final otherId = fromItem == nodeId ? toItem : fromItem;
-        if (_nodes.any((n) => n.id == otherId)) {
+        if (_isItemActive(otherId)) {
           // Check both directions to prevent duplicate links
           final bool alreadyExists = _connections.any((existing) =>
               (existing.fromId == nodeId && existing.toId == otherId) ||
@@ -402,6 +567,10 @@ class GridState extends ChangeNotifier {
       // Valid Code: Extract fields
       final String itemId = response['item_id'] ?? '';
       final String title  = response['title']   ?? '';
+
+      if (!_chronologicalUnlockedItemIds.contains(itemId)) {
+        _chronologicalUnlockedItemIds.add(itemId);
+      }
       final String concept = response['concept'] ?? '';
 
       // Map concept to accent color (used for both endings and blobs)
@@ -415,7 +584,7 @@ class GridState extends ChangeNotifier {
       }
 
       // ── Ending path: activate pentagram node, skip blob spawn ─────────────
-      final bool isEnding = response['is_ending'] == true;
+      final bool isEnding = _endingCodes.contains(response['code']?.toString().toUpperCase() ?? '');
       if (isEnding) {
         if (_activeEndings.contains(concept)) {
           if (context.mounted) {
@@ -441,7 +610,7 @@ class GridState extends ChangeNotifier {
       // Semi-random spawn near canvas center
       final Random rand = Random();
       final double rx = 120.0 + rand.nextDouble() * 300.0;
-      final double ry = 100.0 + rand.nextDouble() * 220.0;
+      final double ry = 160.0 + rand.nextDouble() * 180.0;
 
       final newNode = MapNode(
         id: itemId,
@@ -506,8 +675,12 @@ class GridState extends ChangeNotifier {
 
     final String itemId  = item['item_id'] ?? '';
     final String title   = item['title']   ?? '';
+
+    if (!_chronologicalUnlockedItemIds.contains(itemId)) {
+      _chronologicalUnlockedItemIds.add(itemId);
+    }
     final String concept = item['concept'] ?? '';
-    final bool isEnding  = item['is_ending'] == true;
+    final bool isEnding  = _endingCodes.contains(item['code']?.toString().toUpperCase() ?? '');
 
     Color conceptColor = AppColors.textMuted;
     switch (concept.toLowerCase()) {
@@ -573,7 +746,7 @@ class GridState extends ChangeNotifier {
       id: itemId,
       position: Offset(
         120.0 + rand.nextDouble() * 300.0,
-        100.0 + rand.nextDouble() * 220.0,
+        160.0 + rand.nextDouble() * 180.0,
       ),
       color: conceptColor,
       title: title,

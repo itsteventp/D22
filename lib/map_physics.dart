@@ -47,10 +47,10 @@ class MapNodePhysics {
 class BlobPhysicsSimulator {
   final Map<String, MapNodePhysics> _physics = {};
 
-  static const double _damping        = 0.88;
-  static const double _repulsionForce = 18000.0;
-  static const double _gravityStrength = 0.04;
-  static const double _wobbleAmp      = 0.4;
+  static const double _damping        = 0.75;
+  static const double _repulsionForce = 10000.0;
+  static const double _gravityStrength = 0.08;
+  static const double _wobbleAmp      = 0.08;
   static const double _spawnSpeed     = 0.08; // per frame ~5 frames to reach 1
 
   // ---------------------------------------------------------------------------
@@ -117,11 +117,13 @@ class BlobPhysicsSimulator {
       }
 
       // 4. Boundary bounce (soft — push back when near edges)
-      const margin = 80.0;
-      if (node.position.dx < margin) node.velocity += Offset((margin - node.position.dx) * 0.15, 0);
-      if (node.position.dy < margin) node.velocity += Offset(0, (margin - node.position.dy) * 0.15);
-      if (node.position.dx > canvasSize.width - margin) node.velocity += Offset((canvasSize.width - margin - node.position.dx) * 0.15, 0);
-      if (node.position.dy > canvasSize.height - margin) node.velocity += Offset(0, (canvasSize.height - margin - node.position.dy) * 0.15);
+      const sideMargin = 70.0;
+      const topMargin = 150.0;
+      const bottomMargin = 80.0;
+      if (node.position.dx < sideMargin) node.velocity += Offset((sideMargin - node.position.dx) * 0.15, 0);
+      if (node.position.dy < topMargin) node.velocity += Offset(0, (topMargin - node.position.dy) * 0.15);
+      if (node.position.dx > canvasSize.width - sideMargin) node.velocity += Offset((canvasSize.width - sideMargin - node.position.dx) * 0.15, 0);
+      if (node.position.dy > canvasSize.height - bottomMargin) node.velocity += Offset(0, (canvasSize.height - bottomMargin - node.position.dy) * 0.15);
 
       // 4.5. Sector constraint radiating from center
       final cIdx = _getConceptIndex(node.color);
@@ -187,10 +189,10 @@ class BlobPhysicsSimulator {
   List<MapNodePhysics> get all => _physics.values.toList();
 
   // ---------------------------------------------------------------------------
-  // Radius from title length (constant 18.0 to match the main 6 blobs)
+  // Radius from title length (constant 11.0 to match the main 6 blobs)
   // ---------------------------------------------------------------------------
   static double _radiusForTitle(String title) {
-    return 18.0;
+    return 11.0;
   }
 
   // Get concept index from color

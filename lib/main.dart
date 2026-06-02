@@ -125,7 +125,17 @@ class _MainNavigatorState extends State<MainNavigator>
     _threadCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2800),
-    );
+    )..addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          final state = Provider.of<GridState>(context, listen: false);
+          if (state.currentScreen == 0) {
+            state.setScreen(1);
+            Future.delayed(const Duration(milliseconds: 700), () {
+              state.startProgressiveLoad();
+            });
+          }
+        }
+      });
 
     _loginCtrl = AnimationController(
       vsync: this,
@@ -413,25 +423,25 @@ class _MainNavigatorState extends State<MainNavigator>
                   ),
                 ),
 
-                // ── Layer 4: Dev Auto-Complete FAB (bottom-right) ─────────────
+                // ── Layer 4: Dev Panel overlay (bottom-right) ─────────────────
                 Positioned(
                   bottom: 24.0,
                   right: 24.0,
                   child: ListenableBuilder(
-                    listenable: _loginAnim,
+                    listenable: Listenable.merge([_loginAnim, _transAnim]),
                     builder: (ctx, child) {
-                      return Opacity(
-                        opacity: _loginAnim.value.clamp(0.0, 1.0),
-                        child: IgnorePointer(
-                          ignoring: _loginAnim.value < 0.95,
-                          child: child!,
-                        ),
+                      final tLogin = _loginAnim.value;
+                      final tTrans = _transAnim.value;
+                      if (tLogin < 0.95) return const SizedBox.shrink();
+                      
+                      final isGridMode = tTrans > 0.5;
+                      final state = Provider.of<GridState>(context, listen: false);
+
+                      return DevPanel(
+                        isGridMode: isGridMode,
+                        state: state,
                       );
                     },
-                    child: _DevAutoCompleteFAB(
-                      onTap: () => Provider.of<GridState>(context, listen: false)
-                          .devAutoComplete(),
-                    ),
                   ),
                 ),
 
@@ -483,17 +493,143 @@ class _MainNavigatorState extends State<MainNavigator>
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// _DevAutoCompleteFAB — DEV ONLY: instantly activates all 5 endings
+// DevPanel — DEV ONLY: floating overlay with advanced developer actions
 // ═══════════════════════════════════════════════════════════════════════════
-class _DevAutoCompleteFAB extends StatefulWidget {
-  final VoidCallback onTap;
-  const _DevAutoCompleteFAB({required this.onTap});
+class DevPanel extends StatefulWidget {
+  final bool isGridMode;
+  final GridState state;
+  const DevPanel({super.key, required this.isGridMode, required this.state});
 
   @override
-  State<_DevAutoCompleteFAB> createState() => _DevAutoCompleteFABState();
+  State<DevPanel> createState() => _DevPanelState();
 }
 
-class _DevAutoCompleteFABState extends State<_DevAutoCompleteFAB> {
+class _DevPanelState extends State<DevPanel> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: AppDurations.normal,
+      curve: Curves.easeInOutCubic,
+      decoration: BoxDecoration(
+        color: AppColors.surface.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(12.0),
+        border: Border.all(color: AppColors.borderSubtle, width: 1.0),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 18.0,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          // Header / Toggle
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.developer_mode_rounded,
+                    color: AppColors.textMuted,
+                    size: 14.0,
+                  ),
+                  const SizedBox(width: 6.0),
+                  Text(
+                    'DEV TOOLS',
+                    style: AppTextStyles.label(color: AppColors.textMuted).copyWith(
+                      fontSize: 9.0,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                  const SizedBox(width: 4.0),
+                  Icon(
+                    _expanded ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                    color: AppColors.textMuted,
+                    size: 14.0,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded) ...[
+            const SizedBox(height: 10.0),
+            // General Tools
+            _DevButton(
+              label: 'ERASE ALL DATA',
+              icon: Icons.delete_forever_rounded,
+              color: AppColors.error,
+              onTap: () => widget.state.eraseAllData(),
+            ),
+            const SizedBox(height: 6.0),
+            _DevButton(
+              label: 'LOAD ALL DATA',
+              icon: Icons.cloud_download_rounded,
+              color: AppColors.success,
+              onTap: () => widget.state.loadAllData(),
+            ),
+            if (!widget.isGridMode) ...[
+              const SizedBox(height: 6.0),
+              _DevButton(
+                label: 'AUTO-COMPLETE MAP',
+                icon: Icons.auto_fix_high_rounded,
+                color: AppColors.conceptPurple,
+                onTap: () => widget.state.devAutoComplete(),
+              ),
+            ],
+            if (widget.isGridMode) ...[
+              const SizedBox(height: 6.0),
+              _DevButton(
+                label: 'DELETE GRID CODES',
+                icon: Icons.grid_off_rounded,
+                color: AppColors.conceptOrange,
+                onTap: () => widget.state.deleteGridCodes(),
+              ),
+              const SizedBox(height: 6.0),
+              _DevButton(
+                label: 'START LOADING ANIMATION',
+                icon: Icons.play_circle_fill_rounded,
+                color: AppColors.conceptBlue,
+                onTap: () => widget.state.startProgressiveLoad(),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// _DevButton — styled button helper for DevPanel
+// ═══════════════════════════════════════════════════════════════════════════
+class _DevButton extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _DevButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  State<_DevButton> createState() => _DevButtonState();
+}
+
+class _DevButtonState extends State<_DevButton> {
   bool _hovered = false;
 
   @override
@@ -506,22 +642,35 @@ class _DevAutoCompleteFABState extends State<_DevAutoCompleteFAB> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: AppDurations.fast,
-          padding: const EdgeInsets.all(10.0),
+          padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
           decoration: BoxDecoration(
-            color: _hovered ? AppColors.surfaceHigh : AppColors.surface,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.35),
-                blurRadius: 14,
-                offset: const Offset(0, 4),
+            color: _hovered ? widget.color.withValues(alpha: 0.15) : AppColors.surfaceHigh,
+            borderRadius: BorderRadius.circular(6.0),
+            border: Border.all(
+              color: _hovered ? widget.color.withValues(alpha: 0.7) : AppColors.borderSubtle,
+              width: 1.0,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                widget.icon,
+                size: 13.0,
+                color: _hovered ? widget.color : AppColors.textSecondary,
+              ),
+              const SizedBox(width: 6.0),
+              Text(
+                widget.label,
+                style: AppTextStyles.label(
+                  color: _hovered ? widget.color : AppColors.textSecondary,
+                ).copyWith(
+                  fontSize: 8.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
               ),
             ],
-          ),
-          child: Icon(
-            Icons.auto_fix_high_rounded,
-            color: AppColors.textMuted,
-            size: 14.0,
           ),
         ),
       ),
