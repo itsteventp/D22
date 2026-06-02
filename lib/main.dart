@@ -1,9 +1,7 @@
 import 'dart:math';
 import 'dart:ui' show lerpDouble;
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -83,7 +81,6 @@ class _MainNavigatorState extends State<MainNavigator>
 
   // ── Pentagram hover state (triggers setState, not every frame) ─────────────
   String? _hoveredPentagramId;
-  SystemMouseCursor _pentagramCursor = SystemMouseCursors.basic;
 
   // ── Canvas size (captured once from LayoutBuilder) ─────────────────────────
   Size _screenSize = const Size(800, 600);
@@ -204,93 +201,6 @@ class _MainNavigatorState extends State<MainNavigator>
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // Hit-testing
-  // ══════════════════════════════════════════════════════════════════════════
-
-  String? _hitTest(
-    Offset pos,
-    Offset center,
-    Map<String, Offset> cPos,
-    double nodeR,
-    double coreR,
-    GridState state,
-  ) {
-    // Core has a slightly larger hit target (+10 px ring)
-    if (state.allEndingsUnlocked &&
-        (pos - center).distance < coreR + 10) {
-      return kCoreNodeId;
-    }
-    for (final e in cPos.entries) {
-      if ((pos - e.value).distance < nodeR + 8) return e.key;
-    }
-    return null;
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Interaction handlers
-  // ══════════════════════════════════════════════════════════════════════════
-
-  void _handleTap(
-    TapUpDetails d,
-    Offset center,
-    Map<String, Offset> cPos,
-    double nodeR,
-    double coreR,
-    bool isGridMode,
-  ) {
-    final state = Provider.of<GridState>(context, listen: false);
-    final hit = _hitTest(d.localPosition, center, cPos, nodeR, coreR, state);
-    if (hit == null) return;
-
-    if (hit == kCoreNodeId) {
-      // Core toggles between Map and Grid
-      state.setScreen(isGridMode ? 0 : 1);
-    } else if (isGridMode && state.isEndingActive(hit)) {
-      // Vertex tool selection — ONLY active in grid mode
-      const tMap = {'c1': 1, 'c2': 2, 'c3': 3, 'c4': 4, 'c5': 5};
-      state.setActiveTool(tMap[hit] ?? 0);
-    }
-    // In map mode: vertices are purely visual — no tap action
-  }
-
-  void _handleHover(
-    PointerHoverEvent e,
-    Offset center,
-    Map<String, Offset> cPos,
-    double nodeR,
-    double coreR,
-    bool isGridMode,
-    GridState state,
-  ) {
-    final hit = _hitTest(e.localPosition, center, cPos, nodeR, coreR, state);
-
-    // Only show click cursor for interactive nodes
-    SystemMouseCursor cursor = SystemMouseCursors.basic;
-    if (hit == kCoreNodeId && state.allEndingsUnlocked) {
-      cursor = SystemMouseCursors.click;
-    } else if (hit != null && isGridMode && state.isEndingActive(hit)) {
-      cursor = SystemMouseCursors.click;
-    }
-
-    if (hit != _hoveredPentagramId || cursor != _pentagramCursor) {
-      setState(() {
-        _hoveredPentagramId = hit;
-        _pentagramCursor = cursor;
-      });
-    }
-  }
-
-  void _handleHoverExit() {
-    if (_hoveredPentagramId != null ||
-        _pentagramCursor != SystemMouseCursors.basic) {
-      setState(() {
-        _hoveredPentagramId = null;
-        _pentagramCursor = SystemMouseCursors.basic;
-      });
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
   // Build
   // ══════════════════════════════════════════════════════════════════════════
   @override
@@ -371,38 +281,83 @@ class _MainNavigatorState extends State<MainNavigator>
                       final cPos =
                           _computeConceptPositions(center, radius);
 
-                      return MouseRegion(
-                        // Defer to underlying layer when not over a node
-                        cursor: _hoveredPentagramId != null
-                            ? _pentagramCursor
-                            : MouseCursor.defer,
-                        opaque: false,
-                        onHover: (e) => _handleHover(
-                            e, center, cPos, nodeR, coreR, isGridMode, state),
-                        onExit: (_) => _handleHoverExit(),
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onTapUp: (d) => _handleTap(
-                              d, center, cPos, nodeR, coreR, isGridMode),
-                          child: RepaintBoundary(
-                            child: CustomPaint(
-                              painter: PentagramPainter(
-                                conceptPositions: cPos,
-                                center: center,
-                                activeEndings: state.activeEndingSet,
-                                unlockOrder: state.unlockOrder,
-                                animProgress: _threadCtrl.value,
-                                showCore: state.allEndingsUnlocked,
-                                hoveredId: _hoveredPentagramId,
-                                elapsed: _elapsed,
-                                activeToolIndex: state.activeTool,
-                                nodeRadius: nodeR,
-                                coreRadius: coreR,
+                      return Stack(
+                        children: [
+                          IgnorePointer(
+                            ignoring: true,
+                            child: RepaintBoundary(
+                              child: CustomPaint(
+                                painter: PentagramPainter(
+                                  conceptPositions: cPos,
+                                  center: center,
+                                  activeEndings: state.activeEndingSet,
+                                  unlockOrder: state.unlockOrder,
+                                  animProgress: _threadCtrl.value,
+                                  showCore: state.allEndingsUnlocked,
+                                  hoveredId: _hoveredPentagramId,
+                                  elapsed: _elapsed,
+                                  activeToolIndex: state.activeTool,
+                                  nodeRadius: nodeR,
+                                  coreRadius: coreR,
+                                ),
+                                size: s,
                               ),
-                              size: s,
                             ),
                           ),
-                        ),
+                          if (state.allEndingsUnlocked)
+                            Positioned(
+                              left: center.dx - (coreR + 10),
+                              top: center.dy - (coreR + 10),
+                              width: (coreR + 10) * 2,
+                              height: (coreR + 10) * 2,
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.click,
+                                onEnter: (_) => setState(() {
+                                  _hoveredPentagramId = kCoreNodeId;
+                                }),
+                                onExit: (_) => setState(() {
+                                  _hoveredPentagramId = null;
+                                }),
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () {
+                                    state.setScreen(isGridMode ? 0 : 1);
+                                  },
+                                ),
+                              ),
+                            ),
+                          ...cPos.entries.map((entry) {
+                            final String concept = entry.key;
+                            final Offset pos = entry.value;
+                            final bool isActive = state.isEndingActive(concept);
+                            final bool isInteractive = isGridMode && isActive;
+
+                            if (!isInteractive) return const SizedBox.shrink();
+
+                            return Positioned(
+                              left: pos.dx - (nodeR + 8),
+                              top: pos.dy - (nodeR + 8),
+                              width: (nodeR + 8) * 2,
+                              height: (nodeR + 8) * 2,
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.click,
+                                onEnter: (_) => setState(() {
+                                  _hoveredPentagramId = concept;
+                                }),
+                                onExit: (_) => setState(() {
+                                  _hoveredPentagramId = null;
+                                }),
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () {
+                                    const tMap = {'c1': 1, 'c2': 2, 'c3': 3, 'c4': 4, 'c5': 5};
+                                    state.setActiveTool(tMap[concept] ?? 0);
+                                  },
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
                       );
                     },
                   ),
