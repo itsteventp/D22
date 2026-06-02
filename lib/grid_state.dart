@@ -1,3 +1,5 @@
+import 'dart:convert' show jsonEncode, jsonDecode;
+import 'dart:html' as html;
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -41,6 +43,11 @@ class GridState extends ChangeNotifier {
   // ── Local session tracking (dev mode — not written to unlocked_codes) ────────
   final List<Map<String, dynamic>> _localUnlockedCodes = [];
 
+  // ── Authentication & persistence state ─────────────────────────────────────
+  bool _isLoggedIn = false;
+  bool _isLoggingIn = false;
+  DateTime? _startDate;
+
   // Getters
   int get currentScreen => _currentScreen;
   List<GridCell> get cells => _cells;
@@ -52,6 +59,7 @@ class GridState extends ChangeNotifier {
   int? get selectedColIndex => _selectedColIndex;
   String? get draggingCellId => _draggingCellId;
   int? get draggingRowIndex => _draggingRowIndex;
+  String? get draggingColId => _draggingCellId; // legacy support
   int? get draggingColIndex => _draggingColIndex;
 
   List<String> get cellIds => _cells.map((c) => c.id).toList();
@@ -66,15 +74,204 @@ class GridState extends ChangeNotifier {
   List<String> get unlockOrder => List.unmodifiable(_unlockOrder);
   bool get allEndingsUnlocked => _unlockOrder.length == 5;
 
+  // Auth / session getters
+  bool get isLoggedIn => _isLoggedIn;
+  bool get isLoggingIn => _isLoggingIn;
+  DateTime? get startDate => _startDate;
+
   GridCell getCellById(String id) {
     return _cells.firstWhere((cell) => cell.id == id);
   }
 
   GridState() {
+    // Check if user is already logged in
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session != null) {
+      _isLoggedIn = true;
+      loadStateFromSupabase();
+    } else {
+      generateInitialCells();
+      _nodes = [];
+      _connections = [];
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Authentication & Supabase state synchronization
+  // ---------------------------------------------------------------------------
+
+  Future<bool> login(String password) async {
+    _isLoggingIn = true;
+    notifyListeners();
+    try {
+      final response = await Supabase.instance.client.auth.signInWithPassword(
+        email: 'amorde@mivida.com',
+        password: password,
+      );
+      if (response.session != null) {
+        _isLoggedIn = true;
+        _isLoggingIn = false;
+        await loadStateFromSupabase();
+        notifyListeners();
+        return true;
+      }
+    } catch (e) {
+      debugPrint('Login failed: $e');
+    }
+    _isLoggingIn = false;
+    notifyListeners();
+    return false;
+  }
+
+  Future<void> logout() async {
+    await Supabase.instance.client.auth.signOut();
+    _isLoggedIn = false;
+    _startDate = null;
+    _activeEndings.clear();
+    _unlockOrder.clear();
+    _nodes.clear();
+    _connections.clear();
+    _cells.clear();
+    _itemsCache.clear();
+    html.window.localStorage.remove('grid_layout');
+    html.window.localStorage.remove('active_tool');
+    html.window.localStorage.remove('start_date');
     generateInitialCells();
-    // Start map clean, nodes will be fetched from Supabase
-    _nodes = [];
-    _connections = [];
+    notifyListeners();
+  }
+
+  Future<void> loadStateFromSupabase() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+
+    try {
+      // 1. Fetch all items to populate cache
+      final itemsResponse = await Supabase.instance.client.from('items').select();
+      _itemsCache.clear();
+      for (final item in itemsResponse) {
+        _itemsCache[item['code'].toString().toUpperCase()] = Map<String, dynamic>.from(item);
+      }
+
+      // 2. Fetch master connections
+      await fetchMasterConnections();
+
+      // 3. Fetch unlocked codes for this user
+      final unlockedResponse = await Supabase.instance.client
+          .from('unlocked_codes')
+          .select()
+          .eq('user_id', user.id);
+
+      _nodes.clear();
+      _activeEndings.clear();
+      _unlockOrder.clear();
+
+      for (final unlock in unlockedResponse) {
+        final itemId = unlock['item_id'];
+
+        final item = _itemsCache.values.firstWhere(
+          (i) => i['item_id'] == itemId,
+          orElse: () => {},
+        );
+
+        if (item.isEmpty) continue;
+
+        final concept = item['concept'] ?? '';
+        final String title = item['title'] ?? '';
+        final bool isEnding = item['is_ending'] == true;
+
+        Color conceptColor = AppColors.textMuted;
+        switch (concept.toLowerCase()) {
+          case 'c1': conceptColor = AppColors.conceptPurple; break;
+          case 'c2': conceptColor = AppColors.conceptBlue;   break;
+          case 'c3': conceptColor = AppColors.conceptTeal;   break;
+          case 'c4': conceptColor = AppColors.conceptOrange; break;
+          case 'c5': conceptColor = AppColors.conceptRose;   break;
+        }
+
+        if (isEnding) {
+          _activeEndings.add(concept);
+          _unlockOrder.add(concept);
+        } else {
+          final Random rand = Random();
+          _nodes.add(MapNode(
+            id: itemId,
+            position: Offset(
+              120.0 + rand.nextDouble() * 300.0,
+              100.0 + rand.nextDouble() * 220.0,
+            ),
+            color: conceptColor,
+            title: title,
+          ));
+        }
+      }
+
+      _rebuildConnections();
+
+      // 4. Fetch game state
+      final gameStateResponse = await Supabase.instance.client
+          .from('game_state')
+          .select()
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      if (gameStateResponse != null) {
+        final List<dynamic> layout = gameStateResponse['grid_layout'];
+        _cells = layout.map((json) => GridCell.fromJson(json as Map<String, dynamic>)).toList();
+        _activeTool = gameStateResponse['active_tool'] ?? 0;
+        if (gameStateResponse['start_date'] != null) {
+          _startDate = DateTime.parse(gameStateResponse['start_date']);
+        }
+      } else {
+        // Fallback to local storage or clean init
+        final localLayout = html.window.localStorage['grid_layout'];
+        final localTool = html.window.localStorage['active_tool'];
+        final localStart = html.window.localStorage['start_date'];
+
+        if (localLayout != null) {
+          final List<dynamic> layout = jsonDecode(localLayout);
+          _cells = layout.map((json) => GridCell.fromJson(json as Map<String, dynamic>)).toList();
+          _activeTool = localTool != null ? int.tryParse(localTool) ?? 0 : 0;
+          if (localStart != null) {
+            _startDate = DateTime.tryParse(localStart);
+          }
+        } else {
+          generateInitialCells();
+        }
+
+        await syncGameStateToSupabase();
+      }
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error loading state from Supabase: $e');
+    }
+  }
+
+  Future<void> syncGameStateToSupabase() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+
+    final gridJson = _cells.map((c) => c.toJson()).toList();
+
+    // 1. Local storage sync
+    html.window.localStorage['grid_layout'] = jsonEncode(gridJson);
+    html.window.localStorage['active_tool'] = _activeTool.toString();
+    if (_startDate != null) {
+      html.window.localStorage['start_date'] = _startDate!.toIso8601String();
+    }
+
+    // 2. Supabase async sync
+    Supabase.instance.client.from('game_state').upsert({
+      'user_id': user.id,
+      'grid_layout': gridJson,
+      'active_tool': _activeTool,
+      if (_startDate != null) 'start_date': _startDate!.toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
+    }).then((_) {
+      debugPrint('Synced game state to Supabase.');
+    }).catchError((e) {
+      debugPrint('Error syncing game state: $e');
+    });
   }
 
   // Navigation setter
@@ -281,7 +478,7 @@ class GridState extends ChangeNotifier {
     final upper = enteredCode.toUpperCase().trim();
     if (upper.isEmpty) return;
 
-    // Try in-memory cache first — zero DB cost on repeat lookups
+    // Try in-memory cache first
     Map<String, dynamic>? item = _itemsCache[upper];
     if (item == null) {
       try {
@@ -321,20 +518,49 @@ class GridState extends ChangeNotifier {
       case 'c5': conceptColor = AppColors.conceptRose;   break;
     }
 
+    final user = Supabase.instance.client.auth.currentUser;
+    final bool alreadyUnlocked = isEnding 
+        ? _activeEndings.contains(concept) 
+        : _nodes.any((n) => n.id == itemId);
+
+    if (alreadyUnlocked) {
+      if (context.mounted) {
+        _showToast(
+          context,
+          isEnding ? 'Ending already discovered' : 'Already mapped: $title',
+          AppColors.textMuted,
+        );
+      }
+      return;
+    }
+
+    // Write to Supabase (asynchronously)
+    if (user != null) {
+      Supabase.instance.client.from('unlocked_codes').insert({
+        'user_id': user.id,
+        'item_id': itemId,
+        'image_path': imagePath,
+      }).then((_) {
+        debugPrint('Synced unlocked code $itemId to Supabase.');
+      }).catchError((e) {
+        debugPrint('Error syncing unlocked code: $e');
+      });
+    }
+
     // ── Ending path ───────────────────────────────────────────────────────────
     if (isEnding) {
-      if (_activeEndings.contains(concept)) {
-        if (context.mounted) {
-          _showToast(context, 'Ending already discovered', AppColors.textMuted);
-        }
-        return;
-      }
       activateEnding(concept);
       _localUnlockedCodes.add({
         'item_id': itemId,
         'unlocked_at': DateTime.now().toIso8601String(),
         'image_path': imagePath,
       });
+
+      if (_unlockOrder.length == 5) {
+        _startDate = DateTime.now();
+        await syncGameStateToSupabase();
+      }
+
       if (context.mounted) {
         _showToast(context, 'Ending discovered: $title', conceptColor);
       }
@@ -342,13 +568,6 @@ class GridState extends ChangeNotifier {
     }
 
     // ── Regular item: spawn as floating blob ──────────────────────────────────
-    if (_nodes.any((n) => n.id == itemId)) {
-      if (context.mounted) {
-        _showToast(context, 'Already mapped: $title', AppColors.textMuted);
-      }
-      return;
-    }
-
     final Random rand = Random();
     _nodes.add(MapNode(
       id: itemId,
@@ -421,6 +640,7 @@ class GridState extends ChangeNotifier {
       _activeTool = tool;
       clearSelection();
       notifyListeners();
+      syncGameStateToSupabase();
     }
   }
 
@@ -521,6 +741,7 @@ class GridState extends ChangeNotifier {
       );
       
       notifyListeners();
+      syncGameStateToSupabase();
     }
   }
 
@@ -542,6 +763,7 @@ class GridState extends ChangeNotifier {
       }
     }
     notifyListeners();
+    syncGameStateToSupabase();
   }
 
   // Swap Column A and Column B
@@ -562,6 +784,7 @@ class GridState extends ChangeNotifier {
       }
     }
     notifyListeners();
+    syncGameStateToSupabase();
   }
 
   // Handle cell tap

@@ -10,6 +10,8 @@ import 'map_screen.dart';
 import 'puzzle_board.dart';
 import 'theme.dart';
 import 'widgets/pentagram_painter.dart';
+import 'widgets/morphing_input_bar.dart';
+import 'widgets/void_background_painter.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -73,6 +75,14 @@ class _MainNavigatorState extends State<MainNavigator>
   late final AnimationController _threadCtrl;
   bool _threadTriggered = false;
 
+  // ── Login transition ───────────────────────────────────────────────────────
+  late final AnimationController _loginCtrl;
+  late final CurvedAnimation _loginAnim;
+
+  // ── Shake animation (on login failure) ────────────────────────────────────
+  late final AnimationController _shakeCtrl;
+  late final Animation<double> _shakeAnim;
+
   // ── Elapsed time → core pulse ──────────────────────────────────────────────
   late final Ticker _elapsedTicker;
   final ValueNotifier<double> _elapsedNotifier = ValueNotifier(0.0);
@@ -118,6 +128,27 @@ class _MainNavigatorState extends State<MainNavigator>
       duration: const Duration(milliseconds: 2800),
     );
 
+    _loginCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 750),
+    );
+    _loginAnim = CurvedAnimation(
+      parent: _loginCtrl,
+      curve: Curves.easeInOutCubic,
+    );
+
+    _shakeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _shakeAnim = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 12.0), weight: 1),
+      TweenSequenceItem(tween: Tween(begin: 12.0, end: -12.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: -12.0, end: 8.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 8.0, end: -8.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: -8.0, end: 0.0), weight: 1),
+    ]).animate(CurvedAnimation(parent: _shakeCtrl, curve: Curves.easeInOut));
+
     _elapsedTicker = createTicker(_onElapsedTick)..start();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -129,6 +160,11 @@ class _MainNavigatorState extends State<MainNavigator>
       if (state.allEndingsUnlocked) {
         _threadTriggered = true;
         _threadCtrl.value = 1.0;
+      }
+
+      // Handle already-logged in state on cold start
+      if (state.isLoggedIn) {
+        _loginCtrl.value = 1.0;
       }
     });
   }
@@ -169,6 +205,8 @@ class _MainNavigatorState extends State<MainNavigator>
     } catch (_) {}
     _transCtrl.dispose();
     _threadCtrl.dispose();
+    _loginCtrl.dispose();
+    _shakeCtrl.dispose();
     _elapsedTicker.dispose();
     _elapsedNotifier.dispose();
     super.dispose();
@@ -217,16 +255,26 @@ class _MainNavigatorState extends State<MainNavigator>
             return Stack(
               clipBehavior: Clip.hardEdge,
               children: [
-                // ── Layer 0: MapScreen — fades out as t → 1 ─────────────────
+                // ── Layer 0: Void Background (always on bottom) ──────────────
+                Positioned.fill(
+                  child: SizedBox.expand(
+                    child: CustomPaint(
+                      painter: const VoidBackgroundPainter(),
+                    ),
+                  ),
+                ),
+
+                // ── Layer 1: MapScreen — fades in with login, out with trans ─
                 Positioned.fill(
                   child: ListenableBuilder(
-                    listenable: _transAnim,
+                    listenable: Listenable.merge([_loginAnim, _transAnim]),
                     builder: (ctx, child) {
-                      final t = _transAnim.value;
+                      final tLogin = _loginAnim.value;
+                      final tTrans = _transAnim.value;
                       return Opacity(
-                        opacity: (1.0 - t).clamp(0.0, 1.0),
+                        opacity: ((1.0 - tTrans) * tLogin).clamp(0.0, 1.0),
                         child: IgnorePointer(
-                          ignoring: t > 0.05,
+                          ignoring: tLogin < 0.95 || tTrans > 0.05,
                           child: child!,
                         ),
                       );
@@ -235,9 +283,7 @@ class _MainNavigatorState extends State<MainNavigator>
                   ),
                 ),
 
-                // ── Layer 1: PuzzleBoard — slides up from below as t → 1 ─────
-                // Transform.translate is used so layout is unaffected (the widget
-                // always has full-screen height) and only the visual position moves.
+                // ── Layer 2: PuzzleBoard — slides up from below as tTrans → 1
                 Positioned.fill(
                   child: ListenableBuilder(
                     listenable: _transAnim,
@@ -247,7 +293,6 @@ class _MainNavigatorState extends State<MainNavigator>
                       return Transform.translate(
                         offset: Offset(0, dy),
                         child: IgnorePointer(
-                          // interactive only once transition is nearly complete
                           ignoring: t < 0.92,
                           child: child!,
                         ),
@@ -257,14 +302,14 @@ class _MainNavigatorState extends State<MainNavigator>
                   ),
                 ),
 
-                // ── Layer 2: Pentagram overlay — persistent, animated pos ─────
-                // Rebuilds every frame (elapsed pulse) + on transition + thread.
+                // ── Layer 3: Pentagram overlay — persistent, animated pos ────
                 Positioned.fill(
                   child: ListenableBuilder(
                     listenable: Listenable.merge(
-                        [_transAnim, _threadCtrl, _elapsedNotifier]),
+                        [_transAnim, _threadCtrl, _elapsedNotifier, _loginAnim]),
                     builder: (ctx, _) {
                       final t = _transAnim.value;
+                      final tLogin = _loginAnim.value;
                       final state =
                           Provider.of<GridState>(ctx, listen: false);
                       final isGridMode = t > 0.5;
@@ -281,96 +326,133 @@ class _MainNavigatorState extends State<MainNavigator>
                       final cPos =
                           _computeConceptPositions(center, radius);
 
-                      return Stack(
-                        children: [
-                          IgnorePointer(
-                            ignoring: true,
-                            child: RepaintBoundary(
-                              child: CustomPaint(
-                                painter: PentagramPainter(
-                                  conceptPositions: cPos,
-                                  center: center,
-                                  activeEndings: state.activeEndingSet,
-                                  unlockOrder: state.unlockOrder,
-                                  animProgress: _threadCtrl.value,
-                                  showCore: state.allEndingsUnlocked,
-                                  hoveredId: _hoveredPentagramId,
-                                  elapsed: _elapsed,
-                                  activeToolIndex: state.activeTool,
-                                  nodeRadius: nodeR,
-                                  coreRadius: coreR,
+                      return Opacity(
+                        opacity: tLogin.clamp(0.0, 1.0),
+                        child: IgnorePointer(
+                          ignoring: tLogin < 0.95,
+                          child: Stack(
+                            children: [
+                              IgnorePointer(
+                                ignoring: true,
+                                child: RepaintBoundary(
+                                  child: CustomPaint(
+                                    painter: PentagramPainter(
+                                      conceptPositions: cPos,
+                                      center: center,
+                                      activeEndings: state.activeEndingSet,
+                                      unlockOrder: state.unlockOrder,
+                                      animProgress: _threadCtrl.value,
+                                      showCore: state.allEndingsUnlocked,
+                                      hoveredId: _hoveredPentagramId,
+                                      elapsed: _elapsed,
+                                      activeToolIndex: state.activeTool,
+                                      nodeRadius: nodeR,
+                                      coreRadius: coreR,
+                                    ),
+                                    size: s,
+                                  ),
                                 ),
-                                size: s,
                               ),
-                            ),
+                              if (state.allEndingsUnlocked)
+                                Positioned(
+                                  left: center.dx - (coreR + 10),
+                                  top: center.dy - (coreR + 10),
+                                  width: (coreR + 10) * 2,
+                                  height: (coreR + 10) * 2,
+                                  child: MouseRegion(
+                                    cursor: SystemMouseCursors.click,
+                                    onEnter: (_) => setState(() {
+                                      _hoveredPentagramId = kCoreNodeId;
+                                    }),
+                                    onExit: (_) => setState(() {
+                                      _hoveredPentagramId = null;
+                                    }),
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: () {
+                                        state.setScreen(isGridMode ? 0 : 1);
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ...cPos.entries.map((entry) {
+                                final String concept = entry.key;
+                                final Offset pos = entry.value;
+                                final bool isActive = state.isEndingActive(concept);
+                                final bool isInteractive = isGridMode && isActive;
+
+                                if (!isInteractive) return const SizedBox.shrink();
+
+                                return Positioned(
+                                  left: pos.dx - (nodeR + 8),
+                                  top: pos.dy - (nodeR + 8),
+                                  width: (nodeR + 8) * 2,
+                                  height: (nodeR + 8) * 2,
+                                  child: MouseRegion(
+                                    cursor: SystemMouseCursors.click,
+                                    onEnter: (_) => setState(() {
+                                      _hoveredPentagramId = concept;
+                                    }),
+                                    onExit: (_) => setState(() {
+                                      _hoveredPentagramId = null;
+                                    }),
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: () {
+                                        const tMap = {'c1': 1, 'c2': 2, 'c3': 3, 'c4': 4, 'c5': 5};
+                                        state.setActiveTool(tMap[concept] ?? 0);
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }),
+                            ],
                           ),
-                          if (state.allEndingsUnlocked)
-                            Positioned(
-                              left: center.dx - (coreR + 10),
-                              top: center.dy - (coreR + 10),
-                              width: (coreR + 10) * 2,
-                              height: (coreR + 10) * 2,
-                              child: MouseRegion(
-                                cursor: SystemMouseCursors.click,
-                                onEnter: (_) => setState(() {
-                                  _hoveredPentagramId = kCoreNodeId;
-                                }),
-                                onExit: (_) => setState(() {
-                                  _hoveredPentagramId = null;
-                                }),
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: () {
-                                    state.setScreen(isGridMode ? 0 : 1);
-                                  },
-                                ),
-                              ),
-                            ),
-                          ...cPos.entries.map((entry) {
-                            final String concept = entry.key;
-                            final Offset pos = entry.value;
-                            final bool isActive = state.isEndingActive(concept);
-                            final bool isInteractive = isGridMode && isActive;
-
-                            if (!isInteractive) return const SizedBox.shrink();
-
-                            return Positioned(
-                              left: pos.dx - (nodeR + 8),
-                              top: pos.dy - (nodeR + 8),
-                              width: (nodeR + 8) * 2,
-                              height: (nodeR + 8) * 2,
-                              child: MouseRegion(
-                                cursor: SystemMouseCursors.click,
-                                onEnter: (_) => setState(() {
-                                  _hoveredPentagramId = concept;
-                                }),
-                                onExit: (_) => setState(() {
-                                  _hoveredPentagramId = null;
-                                }),
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: () {
-                                    const tMap = {'c1': 1, 'c2': 2, 'c3': 3, 'c4': 4, 'c5': 5};
-                                    state.setActiveTool(tMap[concept] ?? 0);
-                                  },
-                                ),
-                              ),
-                            );
-                          }),
-                        ],
+                        ),
                       );
                     },
                   ),
                 ),
 
-                // ── Layer 3: Dev Auto-Complete FAB (bottom-right) ─────────────
+                // ── Layer 4: Dev Auto-Complete FAB (bottom-right) ─────────────
                 Positioned(
                   bottom: 24.0,
                   right: 24.0,
-                  child: _DevAutoCompleteFAB(
-                    onTap: () => Provider.of<GridState>(context, listen: false)
-                        .devAutoComplete(),
+                  child: ListenableBuilder(
+                    listenable: _loginAnim,
+                    builder: (ctx, child) {
+                      return Opacity(
+                        opacity: _loginAnim.value.clamp(0.0, 1.0),
+                        child: IgnorePointer(
+                          ignoring: _loginAnim.value < 0.95,
+                          child: child!,
+                        ),
+                      );
+                    },
+                    child: _DevAutoCompleteFAB(
+                      onTap: () => Provider.of<GridState>(context, listen: false)
+                          .devAutoComplete(),
+                    ),
                   ),
+                ),
+
+                // ── Layer 5: Morphing Login / Code Input Bar ─────────────────
+                ListenableBuilder(
+                  listenable: Listenable.merge([_loginAnim, _transAnim, _shakeAnim]),
+                  builder: (ctx, _) {
+                    return MorphingInputBar(
+                      loginAnim: _loginAnim,
+                      transAnim: _transAnim,
+                      shakeAnim: _shakeAnim,
+                      screenSize: s,
+                      onLoginSuccess: () {
+                        _loginCtrl.forward();
+                      },
+                      onShake: () {
+                        _shakeCtrl.forward(from: 0.0);
+                      },
+                    );
+                  },
                 ),
               ],
             );

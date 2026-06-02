@@ -34,4 +34,26 @@ class GridCell {
       secretLetter: secretLetter ?? this.secretLetter,
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'currentCol': currentCol,
+      'currentRow': currentRow,
+      'codeText': codeText,
+      'colorHex': color.toARGB32().toRadixString(16),
+      'secretLetter': secretLetter,
+    };
+  }
+
+  factory GridCell.fromJson(Map<String, dynamic> json) {
+    return GridCell(
+      id: json['id'] as String,
+      currentCol: json['currentCol'] as int,
+      currentRow: json['currentRow'] as int,
+      codeText: json['codeText'] as String,
+      color: Color(int.parse(json['colorHex'] as String, radix: 16)),
+      secretLetter: json['secretLetter'] as String,
+    );
+  }
 }
