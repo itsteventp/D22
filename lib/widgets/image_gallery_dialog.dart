@@ -3,7 +3,6 @@ import 'dart:convert' show base64Decode;
 import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../grid_state.dart';
@@ -193,26 +192,6 @@ class _ImageGalleryDialogState extends State<ImageGalleryDialog> {
         children: [
           Icon(Icons.photo_library_rounded,
               size: 16, color: AppColors.textMuted),
-          const SizedBox(width: 10),
-          Text('Image Gallery', style: AppTextStyles.display()),
-          const SizedBox(width: 10),
-          if (!_loading)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppColors.borderSubtle,
-                borderRadius: BorderRadius.circular(AppRadius.pill),
-              ),
-              child: Text(
-                '${_imageUrls.length}',
-                style: GoogleFonts.inter(
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textMuted,
-                ),
-              ),
-            ),
           const Spacer(),
           if (!_loading && _imageUrls.isNotEmpty)
             _DownloadButton(
@@ -235,32 +214,19 @@ class _ImageGalleryDialogState extends State<ImageGalleryDialog> {
     }
 
     if (_error != null) {
-      return SizedBox(
+      return const SizedBox(
         height: 200,
         child: Center(
-          child: Text(
-            'Could not load images:\n$_error',
-            textAlign: TextAlign.center,
-            style: AppTextStyles.caption(color: AppColors.error),
-          ),
+          child: Icon(Icons.error_outline_rounded, size: 36, color: AppColors.error),
         ),
       );
     }
 
     if (_imageUrls.isEmpty) {
-      return SizedBox(
+      return const SizedBox(
         height: 200,
         child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.image_not_supported_outlined,
-                  size: 36, color: AppColors.textMuted),
-              const SizedBox(height: 10),
-              Text('No images uploaded yet',
-                  style: AppTextStyles.caption(color: AppColors.textMuted)),
-            ],
-          ),
+          child: Icon(Icons.image_not_supported_outlined, size: 36, color: AppColors.textMuted),
         ),
       );
     }
@@ -338,42 +304,32 @@ class _DownloadButtonState extends State<_DownloadButton> {
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
-      cursor: widget.isLoading
-          ? MouseCursor.defer
-          : SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
+      cursor: widget.isLoading ? MouseCursor.defer : SystemMouseCursors.click,
+      onEnter: (_) { if (!widget.isLoading) setState(() => _hovered = true); },
       onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
         onTap: widget.isLoading ? null : widget.onTap,
         child: AnimatedContainer(
           duration: AppDurations.fast,
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.all(8.0),
           decoration: BoxDecoration(
             color: _hovered ? AppColors.surfaceHigh : AppColors.borderSubtle,
-            borderRadius: BorderRadius.circular(AppRadius.md),
+            shape: BoxShape.circle,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (widget.isLoading)
-                SizedBox(
-                  width: 12,
-                  height: 12,
+          child: widget.isLoading
+              ? const SizedBox(
+                  width: 13,
+                  height: 13,
                   child: CircularProgressIndicator(
-                      strokeWidth: 1.5, color: AppColors.textMuted),
+                    strokeWidth: 1.5,
+                    color: AppColors.textMuted,
+                  ),
                 )
-              else
-                Icon(Icons.download_rounded,
-                    size: 13, color: AppColors.textSecondary),
-              const SizedBox(width: 6),
-              Text(
-                widget.isLoading ? 'compositing...' : 'Download',
-                style: AppTextStyles.caption(
-                    color: AppColors.textSecondary),
-              ),
-            ],
-          ),
+              : Icon(
+                  Icons.download_rounded,
+                  size: 13,
+                  color: _hovered ? AppColors.textSecondary : AppColors.textMuted,
+                ),
         ),
       ),
     );

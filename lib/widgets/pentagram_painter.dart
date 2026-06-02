@@ -1,5 +1,4 @@
 import 'dart:math';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../theme.dart';
 
@@ -151,19 +150,7 @@ class PentagramPainter extends CustomPainter {
           ..strokeWidth = isToolActive ? 2.2 : (isActive ? 1.5 : 1.0),
       );
 
-      // Label — show when active or hovered
-      if (isActive || isHovered) {
-        final labelText = kConceptToolNames[concept] ?? concept;
-        final labelColor = isActive
-            ? color.withValues(alpha: isHovered ? 0.95 : 0.72)
-            : AppColors.textMuted.withValues(alpha: 0.42);
-        _drawCenteredText(
-          canvas, labelText,
-          pos.dy + r + 11, pos.dx,
-          labelColor, 10.5,
-          bold: isToolActive,
-        );
-      }
+
     }
   }
 
@@ -191,10 +178,10 @@ class PentagramPainter extends CustomPainter {
       subPath,
       Paint()
         ..color = Colors.white.withValues(alpha: 0.14)
-        ..strokeWidth = 8.0
+        ..strokeWidth = 14.0
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10),
     );
 
     // Main visible line
@@ -202,7 +189,7 @@ class PentagramPainter extends CustomPainter {
       subPath,
       Paint()
         ..color = Colors.white.withValues(alpha: 0.82)
-        ..strokeWidth = 1.8
+        ..strokeWidth = 4.0
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round,
     );
@@ -241,42 +228,9 @@ class PentagramPainter extends CustomPainter {
       );
     }
 
-    // Label
-    _drawCenteredText(
-      canvas, 'Grid',
-      center.dy + r + 11, center.dx,
-      Colors.white.withValues(alpha: 0.52), 10.5,
-    );
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Shared text helper using dart:ui ParagraphBuilder
-  // ──────────────────────────────────────────────────────────────────────────
-  void _drawCenteredText(
-    Canvas canvas,
-    String text,
-    double y,
-    double cx,
-    Color color,
-    double fontSize, {
-    bool bold = false,
-  }) {
-    final pb = ui.ParagraphBuilder(
-      ui.ParagraphStyle(textAlign: TextAlign.center, maxLines: 1),
-    )
-      ..pushStyle(ui.TextStyle(
-        color: color,
-        fontSize: fontSize,
-        fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
-        letterSpacing: 0.6,
-      ))
-      ..addText(text);
 
-    final para = pb.build()
-      ..layout(const ui.ParagraphConstraints(width: 110));
-
-    canvas.drawParagraph(para, Offset(cx - para.longestLine / 2, y));
-  }
 
   // ──────────────────────────────────────────────────────────────────────────
   // shouldRepaint — always repaint when core is visible (for pulse), otherwise

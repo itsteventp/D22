@@ -2,7 +2,6 @@ import 'dart:math';
 import 'dart:ui' show lerpDouble;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'grid_state.dart';
@@ -98,8 +97,8 @@ class _MainNavigatorState extends State<MainNavigator>
   // ── Pentagram geometry constants ───────────────────────────────────────────
   //   Map mode:  node radius 18 px, layout radius up to 165 px
   //   Grid mode: node radius 10 px, layout radius 50 px (compact header)
-  static const double _gridHeaderH   = 158.0; // pixels reserved for mini pentagram
-  static const double _gridCenterY   = 78.0;  // center Y of mini pentagram
+  static const double _gridHeaderH   = 150.0; // pixels reserved for mini pentagram
+  static const double _gridCenterY   = 100.0;  // center Y of mini pentagram
   static const double _gridLayoutR   = 50.0;
   static const double _mapNodeR      = 18.0;
   static const double _gridNodeR     = 10.0;
@@ -224,7 +223,7 @@ class _MainNavigatorState extends State<MainNavigator>
   Offset _gridCenter(Size s) => Offset(s.width / 2, _gridCenterY);
 
   /// Layout radius (center → vertex) in Map mode, clamped for small screens.
-  double _mapRadius(Size s) => (s.shortestSide * 0.28).clamp(90.0, 165.0);
+  double _mapRadius(Size s) => (s.shortestSide * 0.19).clamp(65.0, 115.0);
 
   /// Compute the 5 vertex positions for the given center and radius.
   Map<String, Offset> _computeConceptPositions(Offset center, double radius) {
@@ -436,6 +435,26 @@ class _MainNavigatorState extends State<MainNavigator>
                   ),
                 ),
 
+                // ── Layer 4.5: Load Image Button (top-right, only in Grid view) ──
+                Positioned(
+                  top: 24.0,
+                  right: 24.0,
+                  child: ListenableBuilder(
+                    listenable: _transAnim,
+                    builder: (ctx, child) {
+                      final t = _transAnim.value;
+                      return Opacity(
+                        opacity: t.clamp(0.0, 1.0),
+                        child: IgnorePointer(
+                          ignoring: t < 0.92,
+                          child: child!,
+                        ),
+                      );
+                    },
+                    child: const LoadImageButton(),
+                  ),
+                ),
+
                 // ── Layer 5: Morphing Login / Code Input Bar ─────────────────
                 ListenableBuilder(
                   listenable: Listenable.merge([_loginAnim, _transAnim, _shakeAnim]),
@@ -487,11 +506,10 @@ class _DevAutoCompleteFABState extends State<_DevAutoCompleteFAB> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: AppDurations.fast,
-          padding:
-              const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+          padding: const EdgeInsets.all(10.0),
           decoration: BoxDecoration(
             color: _hovered ? AppColors.surfaceHigh : AppColors.surface,
-            borderRadius: BorderRadius.circular(AppRadius.md),
+            shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.35),
@@ -500,25 +518,10 @@ class _DevAutoCompleteFABState extends State<_DevAutoCompleteFAB> {
               ),
             ],
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.auto_fix_high_rounded,
-                color: AppColors.textMuted,
-                size: 14.0,
-              ),
-              const SizedBox(width: 7.0),
-              Text(
-                'Auto Complete',
-                style: GoogleFonts.inter(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textMuted,
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ],
+          child: Icon(
+            Icons.auto_fix_high_rounded,
+            color: AppColors.textMuted,
+            size: 14.0,
           ),
         ),
       ),

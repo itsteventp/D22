@@ -3,7 +3,6 @@ import 'dart:html' as html;
 import 'dart:math';
 import 'dart:ui' show lerpDouble;
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:typed_data';
@@ -36,7 +35,6 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
   final TextEditingController _textCtrl = TextEditingController();
   final FocusNode _focusNode = FocusNode();
 
-  bool _focused = false;
   bool _isUploading = false;
   bool _isPasswordMode = true;
   String? _attachedImagePath;
@@ -45,7 +43,6 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
   @override
   void initState() {
     super.initState();
-    _focusNode.addListener(_onFocusChange);
     _textCtrl.addListener(_onTextChange);
 
     // If user is already logged in on cold start, bypass password mode immediately
@@ -55,17 +52,12 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
     }
   }
 
-  void _onFocusChange() {
-    if (mounted) setState(() => _focused = _focusNode.hasFocus);
-  }
-
   void _onTextChange() {
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _focusNode.removeListener(_onFocusChange);
     _textCtrl.removeListener(_onTextChange);
     _textCtrl.dispose();
     _focusNode.dispose();
@@ -230,10 +222,7 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
 
     ctx
       ..beginPath()
-      ..arc(w / 2, h / 2, 5, 0, 2 * pi)
-      ..fillStyle = 'rgba(255,255,255,0.65)'
-      ..fill();
-
+      ..arc(w / 2, h / 2, 5, 0, 2 * pi);
     final dataUrl = canvas.toDataUrl('image/png');
     final base64Str = dataUrl.split(',')[1];
     return base64Decode(base64Str);
@@ -247,7 +236,7 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
     final shake = widget.shakeAnim.value;
 
     // Morph coordinates
-    final startY = (s.height - 48.0) / 2;
+    final startY = (s.height - 130.0) / 2;
     const endY = 8.0;
     final y = lerpDouble(startY, endY, t)!;
 
@@ -256,7 +245,7 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
     final x = lerpDouble(startX, endX, t)!;
 
     final width = lerpDouble(320.0, s.width - 40.0, t)!;
-    final height = lerpDouble(48.0, 97.0, t)!;
+    const height = 130.0;
 
     final hasCode = _textCtrl.text.trim().isNotEmpty;
     final hasImage = _attachedImagePath != null;
@@ -272,152 +261,122 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
         child: IgnorePointer(
           ignoring: trans > 0.05,
           child: Container(
-            decoration: BoxDecoration(
-              color: Color.lerp(Colors.transparent, AppColors.surface, t),
-              borderRadius: BorderRadius.circular(lerpDouble(4.0, AppRadius.lg, t)!),
-              border: Border.all(
-                color: Color.lerp(Colors.transparent, AppColors.borderSubtle, t)!,
-                width: t,
-              ),
-              boxShadow: (t > 0.5 && _focused)
-                  ? [
-                      BoxShadow(
-                        color: AppColors.textMuted.withValues(alpha: 0.22),
-                        blurRadius: 22,
-                      ),
-                    ]
-                  : [],
+            decoration: const BoxDecoration(
+              color: Colors.transparent,
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(lerpDouble(4.0, AppRadius.lg, t)!),
-              child: SingleChildScrollView(
-                physics: const NeverScrollableScrollPhysics(),
-                child: Column(
-                  children: [
-                    // ── Row 1: Input Field ───────────────────────────────────
-                    SizedBox(
-                      height: 48.0,
-                      child: Row(
-                        children: [
-                          const SizedBox(width: 16),
-                          Icon(
-                            _isPasswordMode
-                                ? Icons.lock_outline_rounded
-                                : Icons.terminal_rounded,
-                            size: 16.0,
-                            color: _focused
-                                ? AppColors.textSecondary
-                                : AppColors.textMuted,
+            child: Column(
+              children: [
+                // ── Row 1: Input Field ───────────────────────────────────
+                SizedBox(
+                  height: 72.0,
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: TextField(
+                          controller: _textCtrl,
+                          focusNode: _focusNode,
+                          obscureText: _isPasswordMode,
+                          textAlign: TextAlign.center,
+                          style: AppTextStyles.code(
+                            color: AppColors.textPrimary,
+                            size: 27.0, // Double size
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: TextField(
-                              controller: _textCtrl,
-                              focusNode: _focusNode,
-                              obscureText: _isPasswordMode,
-                              style: AppTextStyles.code(
-                                color: AppColors.textPrimary,
-                                size: 13.5,
-                              ),
-                              textCapitalization: _isPasswordMode
-                                  ? TextCapitalization.none
-                                  : TextCapitalization.characters,
-                              decoration: InputDecoration(
-                                hintText: _isPasswordMode
-                                    ? 'Enter master password...'
-                                    : 'Enter code...',
-                                hintStyle: AppTextStyles.code(
-                                  color: AppColors.textMuted,
-                                  size: 13.5,
-                                ),
-                                border: InputBorder.none,
-                                isDense: true,
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                              onSubmitted: (val) {
-                                if (_isPasswordMode) {
-                                  _handlePasswordSubmit(val);
-                                } else {
-                                  if (canSubmit) _handleCodeSubmit(val);
-                                }
-                              },
-                            ),
+                          textCapitalization: _isPasswordMode
+                              ? TextCapitalization.none
+                              : TextCapitalization.characters,
+                          decoration: const InputDecoration(
+                            hintText: '',
+                            border: InputBorder.none,
+                            isDense: true,
+                            contentPadding: EdgeInsets.zero,
                           ),
-                          if (_isPasswordMode && _textCtrl.text.isNotEmpty)
-                            IconButton(
-                              icon: const Icon(
-                                Icons.arrow_forward_rounded,
-                                size: 16.0,
-                                color: AppColors.textPrimary,
-                              ),
-                              onPressed: () => _handlePasswordSubmit(_textCtrl.text),
-                            ),
-                          const SizedBox(width: 8),
-                        ],
-                      ),
-                    ),
-
-                    // ── Password Mode Bottom Line ────────────────────────────
-                    if (t < 0.99)
-                      Opacity(
-                        opacity: (1.0 - t).clamp(0.0, 1.0),
-                        child: Container(
-                          height: 1.5,
-                          width: double.infinity,
-                          color: AppColors.textMuted,
+                          onSubmitted: (val) {
+                            if (_isPasswordMode) {
+                              _handlePasswordSubmit(val);
+                            } else {
+                              if (canSubmit) _handleCodeSubmit(val);
+                            }
+                          },
                         ),
                       ),
+                      const SizedBox(width: 16),
+                    ],
+                  ),
+                ),
 
-                    // ── Row 2: Attachment Tools (Map Mode Only) ──────────────
-                    if (t > 0.1) ...[
-                      Opacity(
-                        opacity: ((t - 0.5) * 2).clamp(0.0, 1.0),
-                        child: Container(
-                          height: 1,
-                          margin: const EdgeInsets.symmetric(horizontal: 14.0),
-                          color: AppColors.borderSubtle,
+                // ── Bottom Line (Always Visible when Input Bar is Active) ────
+                Container(
+                  height: 5.0, // Thicker visible line
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: AppColors.textMuted,
+                    borderRadius: BorderRadius.circular(2.5),
+                  ),
+                ),
+
+                const SizedBox(height: 5),
+
+                // ── Row 2: Action Tools & Submit Button ──────────────────
+                SizedBox(
+                  height: 48.0,
+                  child: Row(
+                    children: [
+                      if (t > 0.1) ...[
+                        Opacity(
+                          opacity: ((t - 0.5) * 2).clamp(0.0, 1.0),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(width: 12),
+                              _MicroButton(
+                                icon: Icons.auto_awesome_rounded,
+                                onTap: _isUploading ? null : _handleAutoImage,
+                              ),
+                              const SizedBox(width: 8),
+                              _MicroButton(
+                                icon: Icons.attach_file_rounded,
+                                onTap: _isUploading ? null : _handleAttachImage,
+                              ),
+                              const SizedBox(width: 12),
+                            ],
+                          ),
                         ),
-                      ),
-                      Opacity(
-                        opacity: ((t - 0.5) * 2).clamp(0.0, 1.0),
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(12.0, 7.0, 6.0, 7.0),
-                          child: SizedBox(
-                            height: 32.0,
-                            child: Row(
-                              children: [
-                                _MicroButton(
-                                  label: 'auto',
-                                  icon: Icons.auto_awesome_rounded,
-                                  onTap: _isUploading ? null : _handleAutoImage,
-                                ),
-                                const SizedBox(width: 6),
-                                _MicroButton(
-                                  label: 'attach',
-                                  icon: Icons.attach_file_rounded,
-                                  onTap: _isUploading ? null : _handleAttachImage,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: _ImageStatusIndicator(
-                                    isUploading: _isUploading,
-                                    imageName: _attachedImageName,
-                                    hasImage: hasImage,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                _SubmitButton(
-                                  onPressed: canSubmit ? () => _handleCodeSubmit(_textCtrl.text) : null,
-                                ),
-                              ],
+                        Expanded(
+                          child: Opacity(
+                            opacity: ((t - 0.5) * 2).clamp(0.0, 1.0),
+                            child: _ImageStatusIndicator(
+                              isUploading: _isUploading,
+                              imageName: _attachedImageName,
+                              hasImage: hasImage,
+                            ),
+                          ),
+                        ),
+                      ] else
+                        const Spacer(),
+
+                      // Sliding submit button (centered initially, right-aligned in map mode)
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment(lerpDouble(0.0, 1.0, t)!, 0.0),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                            child: _SubmitButton(
+                              onPressed: _isPasswordMode
+                                  ? (_textCtrl.text.isNotEmpty
+                                      ? () => _handlePasswordSubmit(_textCtrl.text)
+                                      : null)
+                                  : (canSubmit
+                                      ? () => _handleCodeSubmit(_textCtrl.text)
+                                      : null),
                             ),
                           ),
                         ),
                       ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
         ),
@@ -428,10 +387,9 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
 
 // ── MicroButton (Copied from map_screen) ─────────────────────────────────────
 class _MicroButton extends StatefulWidget {
-  final String label;
   final IconData icon;
   final VoidCallback? onTap;
-  const _MicroButton({required this.label, required this.icon, required this.onTap});
+  const _MicroButton({required this.icon, required this.onTap});
 
   @override
   State<_MicroButton> createState() => _MicroButtonState();
@@ -451,24 +409,15 @@ class _MicroButtonState extends State<_MicroButton> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: AppDurations.fast,
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          padding: const EdgeInsets.all(10.0),
           decoration: BoxDecoration(
             color: _hovered ? AppColors.surfaceHigh : AppColors.borderSubtle,
-            borderRadius: BorderRadius.circular(AppRadius.pill),
+            shape: BoxShape.circle,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(widget.icon,
-                  size: 10,
-                  color: _hovered ? AppColors.textSecondary : AppColors.textMuted),
-              const SizedBox(width: 4),
-              Text(
-                widget.label,
-                style: AppTextStyles.caption(
-                    color: _hovered ? AppColors.textSecondary : AppColors.textMuted),
-              ),
-            ],
+          child: Icon(
+            widget.icon,
+            size: 15.0, // 50% larger than 10.0
+            color: _hovered ? AppColors.textSecondary : AppColors.textMuted,
           ),
         ),
       ),
@@ -518,7 +467,7 @@ class _ImageStatusIndicator extends StatelessWidget {
                     Container(
                       width: 6,
                       height: 6,
-                      decoration: BoxDecoration(
+                      decoration: const BoxDecoration(
                         color: AppColors.success,
                         shape: BoxShape.circle,
                       ),
@@ -579,14 +528,14 @@ class _SubmitButtonState extends State<_SubmitButton> {
         onTap: widget.onPressed,
         child: AnimatedContainer(
           duration: AppDurations.fast,
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+          padding: const EdgeInsets.all(12.0),
           decoration: BoxDecoration(
             color: enabled
                 ? (_hovered
                     ? AppColors.textPrimary
                     : AppColors.textPrimary.withValues(alpha: 0.88))
-                : AppColors.textMuted.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(AppRadius.md),
+                : AppColors.border,
+            shape: BoxShape.circle,
             boxShadow: (enabled && _hovered)
                 ? [
                     BoxShadow(
@@ -596,15 +545,12 @@ class _SubmitButtonState extends State<_SubmitButton> {
                   ]
                 : [],
           ),
-          child: Text(
-            'Unlock',
-            style: GoogleFonts.inter(
-              fontSize: 12.0,
-              fontWeight: FontWeight.w700,
-              color: enabled
-                  ? AppColors.background
-                  : AppColors.textMuted.withValues(alpha: 0.45),
-            ),
+          child: Icon(
+            Icons.arrow_forward_rounded,
+            size: 24.0, // 50% larger than 16.0
+            color: enabled
+                ? AppColors.background
+                : AppColors.textSecondary,
           ),
         ),
       ),

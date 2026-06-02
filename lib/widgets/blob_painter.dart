@@ -56,7 +56,7 @@ class BlobCanvasPainter extends CustomPainter {
 
       final linePaint = Paint()
         ..shader = shader
-        ..strokeWidth = 1.5
+        ..strokeWidth = 3.5
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round;
 
@@ -65,10 +65,10 @@ class BlobCanvasPainter extends CustomPainter {
       // Glow layer — wider, very transparent
       final glowPaint = Paint()
         ..color = fromNode.color.withValues(alpha: 0.07)
-        ..strokeWidth = 6.0
+        ..strokeWidth = 12.0
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
 
       canvas.drawLine(fromPos, toPos, glowPaint);
     }

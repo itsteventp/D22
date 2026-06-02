@@ -666,33 +666,69 @@ class GridState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Generate initial grid state
+  // Final target configuration of codes
+  static const List<List<String>> kCorrectGrid = [
+    ['1CLMF1', 'Z82012', 'M2IM62', 'B02DT2', 'B17A41', '2WAPPF'],
+    ['4T9F82', 'RA4YR1', '8F4MQK', 'K123S1', 'D655J1', 'JB4UG2'],
+    ['V97JCA', 'AW3Z8Q', '9BC8E2', '375BPG', 'TZ1P02', '635R92'],
+    ['K57E72', 'K8TD91', '1FMLC1', 'FPPAW2', '32CK42', '3G8D83'],
+    ['F83N71', 'V3I2K2', 'GFAN63', 'A0XH0A', '896X9C', '7C7DM1'],
+    ['ABCA43', '00I1A1', '5FY414', 'XECY72', '0CRL51', 'HLM832'],
+    ['1BRB61', 'DDD1D2', 'IB6001', 'B39BU2', 'FJSM91', 'D6A371'],
+    ['36NAFG', '6IITU1', '8I27J3', 'B48EF1', '07617G', 'A0HX0A'],
+  ];
+
+  // Check if grid is solved
+  bool get isGridSolved {
+    if (_cells.length < 48) return false;
+    for (int r = 0; r < 8; r++) {
+      for (int c = 0; c < 6; c++) {
+        final cell = getCellAt(c, r);
+        if (cell == null || cell.codeText != kCorrectGrid[r][c]) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  void checkGrid(BuildContext context) {
+    if (isGridSolved) {
+      _showToast(context, 'Stabilization complete.', AppColors.success);
+    } else {
+      _showToast(context, 'Verification failed.', AppColors.error);
+    }
+  }
+
+  // Generate initial grid state by scrambling the final codes
   void generateInitialCells() {
-    final Random rand = Random();
+    scrambleGrid(syncToSupabase: false);
+  }
+
+  // Scramble the correct codes and assign to grid
+  void scrambleGrid({bool syncToSupabase = true}) {
+    final List<String> flatCodes = [];
+    for (final row in kCorrectGrid) {
+      flatCodes.addAll(row);
+    }
+    flatCodes.shuffle();
+
     final List<Color> conceptColors = [
-      const Color(0xFF9b5de5), // Purple
-      const Color(0xFFf15bb5), // Hot Pink / Magenta
-      const Color(0xFF00f5d4), // Turquoise / Cyan
-      const Color(0xFF00bbf9), // Blue
-      const Color(0xFFfee440), // Yellow
-      const Color(0xFFff9f1c), // Orange
-      const Color(0xFF2ec4b6), // Teal
-      const Color(0xFFe71d36), // Red
+      AppColors.conceptPurple,
+      AppColors.conceptBlue,
+      AppColors.conceptTeal,
+      AppColors.conceptOrange,
+      AppColors.conceptRose,
     ];
 
     const String alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    _cells = [];
+    final Random rand = Random();
 
+    _cells = [];
+    int index = 0;
     for (int r = 0; r < 8; r++) {
       for (int c = 0; c < 6; c++) {
-        final String code = List.generate(6, (index) {
-          if (rand.nextBool()) {
-            return alphabet[rand.nextInt(alphabet.length)];
-          } else {
-            return rand.nextInt(10).toString();
-          }
-        }).join();
-
+        final String code = flatCodes[index++];
         final Color color = conceptColors[rand.nextInt(conceptColors.length)];
         final String letter = alphabet[rand.nextInt(alphabet.length)];
 
@@ -709,6 +745,9 @@ class GridState extends ChangeNotifier {
       }
     }
     notifyListeners();
+    if (syncToSupabase && isLoggedIn) {
+      syncGameStateToSupabase();
+    }
   }
 
   // Find a cell at coordinates

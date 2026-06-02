@@ -1,12 +1,14 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'map_node.dart';
+import 'theme.dart';
 
 // ---------------------------------------------------------------------------
 // MapNodePhysics — runtime physics wrapper for a single blob
 // ---------------------------------------------------------------------------
 class MapNodePhysics {
   final String nodeId;
+  final Color color;
 
   // Position is kept in sync with GridState.nodes, but physics drives it
   Offset position;
@@ -28,6 +30,7 @@ class MapNodePhysics {
 
   MapNodePhysics({
     required this.nodeId,
+    required this.color,
     required this.position,
     required this.radius,
   })  : velocity = Offset.zero,
@@ -59,6 +62,7 @@ class BlobPhysicsSimulator {
       if (!_physics.containsKey(node.id)) {
         _physics[node.id] = MapNodePhysics(
           nodeId: node.id,
+          color: node.color,
           position: node.position,
           radius: _radiusForTitle(node.title),
         );
@@ -119,6 +123,30 @@ class BlobPhysicsSimulator {
       if (node.position.dx > canvasSize.width - margin) node.velocity += Offset((canvasSize.width - margin - node.position.dx) * 0.15, 0);
       if (node.position.dy > canvasSize.height - margin) node.velocity += Offset(0, (canvasSize.height - margin - node.position.dy) * 0.15);
 
+      // 4.5. Sector constraint radiating from center
+      final cIdx = _getConceptIndex(node.color);
+      if (cIdx != -1) {
+        final toNode = node.position - center;
+        final d = toNode.distance;
+        if (d > 5.0) {
+          final double currentAngle = atan2(toNode.dy, toNode.dx);
+          final double targetAngle = -pi / 2 + cIdx * 2 * pi / 5;
+          double angleDiff = currentAngle - targetAngle;
+          while (angleDiff < -pi) {
+            angleDiff += 2 * pi;
+          }
+          while (angleDiff > pi) {
+            angleDiff -= 2 * pi;
+          }
+          const double maxAngleDiff = pi / 5;
+          if (angleDiff.abs() > maxAngleDiff) {
+            final double clampedAngle = targetAngle + angleDiff.sign * maxAngleDiff;
+            final targetPos = center + Offset(cos(clampedAngle), sin(clampedAngle)) * d;
+            node.velocity += (targetPos - node.position) * 0.15;
+          }
+        }
+      }
+
       // 5. Damping
       node.velocity *= _damping;
 
@@ -159,9 +187,19 @@ class BlobPhysicsSimulator {
   List<MapNodePhysics> get all => _physics.values.toList();
 
   // ---------------------------------------------------------------------------
-  // Radius from title length
+  // Radius from title length (constant 18.0 to match the main 6 blobs)
   // ---------------------------------------------------------------------------
   static double _radiusForTitle(String title) {
-    return (32.0 + title.length * 2.5).clamp(36.0, 64.0);
+    return 18.0;
+  }
+
+  // Get concept index from color
+  int _getConceptIndex(Color color) {
+    if (color == AppColors.conceptPurple) return 0;
+    if (color == AppColors.conceptBlue) return 1;
+    if (color == AppColors.conceptTeal) return 2;
+    if (color == AppColors.conceptOrange) return 3;
+    if (color == AppColors.conceptRose) return 4;
+    return -1;
   }
 }
