@@ -4,7 +4,6 @@ import 'dart:math';
 import 'dart:ui' show lerpDouble;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:typed_data';
 import '../grid_state.dart';
 import '../theme.dart';
@@ -37,7 +36,9 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
 
   bool _isUploading = false;
   bool _isPasswordMode = true;
-  String? _attachedImagePath;
+  Uint8List? _attachedImageBytes;
+  String? _attachedImageMime;
+  String? _attachedImageExt;
   String? _attachedImageName;
 
   @override
@@ -81,9 +82,9 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
     }
   }
 
-  void _handleCodeSubmit(String code) {
+  Future<void> _handleCodeSubmit(String code) async {
     if (code.isEmpty) return;
-    if (_attachedImagePath == null) {
+    if (_attachedImageBytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Container(
@@ -101,13 +102,27 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
       );
       return;
     }
+    setState(() => _isUploading = true);
     final state = Provider.of<GridState>(context, listen: false);
-    state.submitCodeWithImage(code, _attachedImagePath!, context);
-    _textCtrl.clear();
-    setState(() {
-      _attachedImagePath = null;
-      _attachedImageName = null;
-    });
+    final success = await state.submitCodeWithImage(
+      enteredCode: code,
+      imageBytes: _attachedImageBytes!,
+      imageMime: _attachedImageMime!,
+      imageExt: _attachedImageExt!,
+      context: context,
+    );
+    if (mounted) {
+      setState(() => _isUploading = false);
+      if (success) {
+        _textCtrl.clear();
+        setState(() {
+          _attachedImageBytes = null;
+          _attachedImageMime = null;
+          _attachedImageExt = null;
+          _attachedImageName = null;
+        });
+      }
+    }
   }
 
   // ── Image attachment methods (extracted from old map_screen _InputBar) ──────
@@ -117,24 +132,16 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
     try {
       final bytes = await _generateRandomColorPng();
       final name = 'auto_${DateTime.now().millisecondsSinceEpoch}.png';
-      await Supabase.instance.client.storage
-          .from('unlocked_images')
-          .uploadBinary(
-            name,
-            bytes,
-            fileOptions: const FileOptions(contentType: 'image/png'),
-          );
-      final url = Supabase.instance.client.storage
-          .from('unlocked_images')
-          .getPublicUrl(name);
       if (mounted) {
         setState(() {
-          _attachedImagePath = url;
+          _attachedImageBytes = bytes;
+          _attachedImageMime = 'image/png';
+          _attachedImageExt = 'png';
           _attachedImageName = name;
         });
       }
     } catch (e) {
-      debugPrint('Auto image upload error: $e');
+      debugPrint('Auto image generation error: $e');
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
@@ -230,17 +237,11 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
           targetExt = 'jpg';
         }
 
-        final name = 'img_${DateTime.now().millisecondsSinceEpoch}.$targetExt';
-        await Supabase.instance.client.storage
-            .from('unlocked_images')
-            .uploadBinary(name, bytes,
-                fileOptions: FileOptions(contentType: targetMime));
-        final url = Supabase.instance.client.storage
-            .from('unlocked_images')
-            .getPublicUrl(name);
         if (mounted) {
           setState(() {
-            _attachedImagePath = url;
+            _attachedImageBytes = bytes;
+            _attachedImageMime = targetMime;
+            _attachedImageExt = targetExt;
             _attachedImageName = file.name;
           });
         }
@@ -312,7 +313,7 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
     const height = 130.0;
 
     final hasCode = _textCtrl.text.trim().isNotEmpty;
-    final hasImage = _attachedImagePath != null;
+    final hasImage = _attachedImageBytes != null;
     final canSubmit = hasCode && hasImage && !_isUploading;
 
     return Positioned(

@@ -429,9 +429,9 @@ class _PuzzleBoardState extends State<PuzzleBoard> with SingleTickerProviderStat
 
                                 // 7. Tool 5 — quadrant symmetry overlay (Pointed Lines Painter)
                                 if (activeTool == 5)
-                                  IgnorePointer(
-                                    child: RepaintBoundary(
-                                      child: Positioned.fill(
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: RepaintBoundary(
                                         child: Selector<GridState, double>(
                                           selector: (_, s) => s.isFinalizing ? s.finalizationProgress : 0.0,
                                           builder: (context, progress, child) {

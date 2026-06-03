@@ -456,16 +456,21 @@ class _MainNavigatorState extends State<MainNavigator>
                 Positioned(
                   top: 24.0,
                   right: 24.0,
-                  child: ListenableBuilder(
-                    listenable: _transAnim,
-                    builder: (ctx, child) {
-                      final t = _transAnim.value;
-                      return Opacity(
-                        opacity: t.clamp(0.0, 1.0),
-                        child: IgnorePointer(
-                          ignoring: t < 0.92,
-                          child: child!,
-                        ),
+                  child: Consumer<GridState>(
+                    builder: (ctx, state, child) {
+                      if (!state.isDevMode) return const SizedBox.shrink();
+                      return ListenableBuilder(
+                        listenable: _transAnim,
+                        builder: (ctx, _) {
+                          final t = _transAnim.value;
+                          return Opacity(
+                            opacity: t.clamp(0.0, 1.0),
+                            child: IgnorePointer(
+                              ignoring: t < 0.92,
+                              child: child!,
+                            ),
+                          );
+                        },
                       );
                     },
                     child: const LoadImageButton(),

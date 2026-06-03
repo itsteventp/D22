@@ -2,6 +2,7 @@ import 'dart:async' show Timer;
 import 'dart:convert' show jsonEncode, jsonDecode;
 import 'dart:html' as html;
 import 'dart:math';
+import 'dart:typed_data' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'grid_cell.dart';
@@ -691,17 +692,19 @@ class GridState extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // submitCodeWithImage — validates code (with in-memory cache), stores entry
-  // locally. Image path comes from the Storage upload done in the UI layer.
-  // Dev mode: does NOT write to the unlocked_codes table.
+  // submitCodeWithImage — validates code (with in-memory cache), uploads image,
+  // and stores entry locally and in database.
+  // Returns true if verification and upload succeed, false otherwise.
   // ---------------------------------------------------------------------------
-  Future<void> submitCodeWithImage(
-    String enteredCode,
-    String imagePath,
-    BuildContext context,
-  ) async {
+  Future<bool> submitCodeWithImage({
+    required String enteredCode,
+    required Uint8List imageBytes,
+    required String imageMime,
+    required String imageExt,
+    required BuildContext context,
+  }) async {
     final upper = enteredCode.toUpperCase().trim();
-    if (upper.isEmpty) return;
+    if (upper.isEmpty) return false;
 
     // Try in-memory cache first
     Map<String, dynamic>? item = _itemsCache[upper];
@@ -717,7 +720,7 @@ class GridState extends ChangeNotifier {
           if (context.mounted) {
             _showToast(context, 'Invalid code', AppColors.error);
           }
-          return;
+          return false;
         }
         _itemsCache[upper] = Map<String, dynamic>.from(response);
         item = _itemsCache[upper]!;
@@ -725,7 +728,7 @@ class GridState extends ChangeNotifier {
         if (context.mounted) {
           _showToast(context, 'Error: $e', AppColors.error);
         }
-        return;
+        return false;
       }
     }
 
@@ -760,7 +763,28 @@ class GridState extends ChangeNotifier {
           AppColors.textMuted,
         );
       }
-      return;
+      return false;
+    }
+
+    // Upload to Supabase Storage only now after code is validated successfully
+    String imagePath = '';
+    try {
+      final name = 'img_${DateTime.now().millisecondsSinceEpoch}.$imageExt';
+      await Supabase.instance.client.storage
+          .from('unlocked_images')
+          .uploadBinary(
+            name,
+            imageBytes,
+            fileOptions: FileOptions(contentType: imageMime),
+          );
+      imagePath = Supabase.instance.client.storage
+          .from('unlocked_images')
+          .getPublicUrl(name);
+    } catch (e) {
+      if (context.mounted) {
+        _showToast(context, 'Storage upload error: $e', AppColors.error);
+      }
+      return false;
     }
 
     // Write to Supabase (asynchronously)
@@ -793,7 +817,7 @@ class GridState extends ChangeNotifier {
       if (context.mounted) {
         _showToast(context, 'Ending discovered: $title', conceptColor);
       }
-      return;
+      return true;
     }
 
     // ── Regular item: spawn as floating blob ──────────────────────────────────
@@ -818,6 +842,7 @@ class GridState extends ChangeNotifier {
     if (context.mounted) {
       _showToast(context, 'Mapped: $title', AppColors.success);
     }
+    return true;
   }
 
   // ---------------------------------------------------------------------------
