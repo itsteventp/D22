@@ -6,13 +6,131 @@ import 'grid_state.dart';
 import 'theme.dart';
 import 'widgets/image_gallery_dialog.dart';
 
-class PuzzleBoard extends StatelessWidget {
+class PuzzleBoard extends StatefulWidget {
   const PuzzleBoard({super.key});
 
   static const double cellWidth   = 48.0;
   static const double cellHeight  = 28.0;
   static const double cellSpacing = 4.0;
   static const double handleSize  = 24.0;
+
+  @override
+  State<PuzzleBoard> createState() => _PuzzleBoardState();
+}
+
+class _PuzzleBoardState extends State<PuzzleBoard> with SingleTickerProviderStateMixin {
+  late final AnimationController _finalizationCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    final state = Provider.of<GridState>(context, listen: false);
+
+    _finalizationCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    );
+
+    _finalizationCtrl.addListener(() {
+      state.updateFinalizationProgress(_finalizationCtrl.value);
+    });
+
+    state.addListener(_onStateChanged);
+
+    if (state.isSolvedAndFinished) {
+      _finalizationCtrl.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    try {
+      Provider.of<GridState>(context, listen: false).removeListener(_onStateChanged);
+    } catch (_) {}
+    _finalizationCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onStateChanged() {
+    if (!mounted) return;
+    final state = Provider.of<GridState>(context, listen: false);
+    if (state.isSolvedAndFinished && _finalizationCtrl.value < 1.0) {
+      _finalizationCtrl.value = 1.0;
+    } else if (!state.isSolvedAndFinished && !state.isFinalizing && _finalizationCtrl.value > 0.0) {
+      _finalizationCtrl.value = 0.0;
+    }
+  }
+
+  void _handleCheckPressed() async {
+    final state = Provider.of<GridState>(context, listen: false);
+    if (state.isSolvedAndFinished) {
+      showDialog<void>(
+        context: context,
+        builder: (_) => const ImageGalleryDialog(),
+      );
+      return;
+    }
+
+    if (state.isFinalizing) return;
+
+    // 1. Transform codes to secret letters
+    state.startFinalization();
+
+    // 2. Play animation forward
+    await _finalizationCtrl.forward();
+
+    // 3. Small pause (2 seconds)
+    await Future.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+
+    // 4. Trigger validation check
+    if (state.isGridSolved) {
+      state.completePuzzle();
+    } else {
+      // Show failure SnackBar
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1C1C24),
+              borderRadius: BorderRadius.circular(12.0),
+              border: const Border(
+                left: BorderSide(color: AppColors.error, width: 3.0),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black,
+                  blurRadius: 20,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Text(
+              'Verification failed. Grid unstable.',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12.5,
+                color: Color(0xFFEEEEF5),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          margin: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          duration: const Duration(seconds: 2),
+          padding: EdgeInsets.zero,
+        ),
+      );
+
+      // Play animation back
+      await _finalizationCtrl.reverse();
+      state.cancelFinalization();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +142,7 @@ class PuzzleBoard extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(20.0, 16.0, 20.0, 12.0),
           child: Selector<GridState, int>(
-            selector: (_, s) => s.activeTool,
+            selector: (_, s) => (s.isFinalizing || s.isSolvedAndFinished) ? 0 : s.activeTool,
             builder: (context, activeTool, _) {
               final toolColors = {
                 1: AppColors.conceptPurple,
@@ -92,277 +210,354 @@ class PuzzleBoard extends StatelessWidget {
         // ── Board ────────────────────────────────────────────────────────
         Expanded(
           child: Align(
-            alignment: Alignment.topCenter,
+            alignment: Alignment.center,
             child: Selector<GridState, int>(
               selector: (_, s) => s.activeTool,
               builder: (context, activeTool, _) {
                 // Dimensions locked in place to prevent the grid shifting on tool change
-                final double totalWidth = handleSize +
-                    7 * (cellWidth + cellSpacing) +
+                final double totalWidth = PuzzleBoard.handleSize +
+                    7 * (PuzzleBoard.cellWidth + PuzzleBoard.cellSpacing) +
                     16.0;
-                final double totalHeight = handleSize +
-                    8 * (cellHeight + cellSpacing) +
-                    (handleSize + cellSpacing) +
+                final double totalHeight = PuzzleBoard.handleSize +
+                    8 * (PuzzleBoard.cellHeight + PuzzleBoard.cellSpacing) +
+                    (PuzzleBoard.handleSize + PuzzleBoard.cellSpacing) +
                     16.0;
 
                 return SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: SingleChildScrollView(
                     scrollDirection: Axis.vertical,
-                    child: GestureDetector(
-                      onTap: () => state.clearSelection(),
-                      child: AnimatedContainer(
-                        duration: AppDurations.normal,
-                        width: totalWidth,
-                        height: totalHeight,
-                        margin: const EdgeInsets.all(16.0),
-                        padding: const EdgeInsets.all(8.0),
-                        decoration: const BoxDecoration(
-                          color: Colors.transparent,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          onTap: () => state.clearSelection(),
+                          child: AnimatedContainer(
+                            duration: AppDurations.normal,
+                            width: totalWidth,
+                            height: totalHeight,
+                            margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                            padding: const EdgeInsets.all(8.0),
+                            decoration: const BoxDecoration(
+                              color: Colors.transparent,
+                            ),
+                            child: Stack(
+                              children: [
+                                // 1. Ghost slot backgrounds
+                                ...List.generate(8, (r) {
+                                  return List.generate(6, (c) {
+                                    final x = PuzzleBoard.handleSize + c * (PuzzleBoard.cellWidth + PuzzleBoard.cellSpacing);
+                                    final y = PuzzleBoard.handleSize + r * (PuzzleBoard.cellHeight + PuzzleBoard.cellSpacing);
+                                    return Positioned(
+                                      left: x,
+                                      top: y,
+                                      child: Selector<GridState, double>(
+                                        selector: (_, s) => s.isFinalizing ? s.finalizationProgress : 0.0,
+                                        builder: (context, progress, _) {
+                                          return Opacity(
+                                            opacity: (1.0 - progress).clamp(0.0, 1.0),
+                                            child: Container(
+                                              width: PuzzleBoard.cellWidth,
+                                              height: PuzzleBoard.cellHeight,
+                                              decoration: BoxDecoration(
+                                                color: AppColors.borderSubtle,
+                                                borderRadius: BorderRadius.circular(AppRadius.sm),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    );
+                                  });
+                                }).expand((e) => e),
+
+                                // 2. Row handles
+                                ...List.generate(8, (r) {
+                                  final y = PuzzleBoard.handleSize + r * (PuzzleBoard.cellHeight + PuzzleBoard.cellSpacing);
+                                  return Positioned(
+                                      left: 0,
+                                      top: y,
+                                      child: Selector<GridState, double>(
+                                        selector: (_, s) => s.isFinalizing ? s.finalizationProgress : 0.0,
+                                        builder: (context, progress, _) {
+                                          return Opacity(
+                                            opacity: (1.0 - progress).clamp(0.0, 1.0),
+                                            child: IgnorePointer(
+                                              ignoring: progress > 0.05,
+                                              child: RowHandleWidget(index: r),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    );
+                                  }),
+
+                                // 3. Column handles
+                                ...List.generate(6, (c) {
+                                  final x = PuzzleBoard.handleSize + c * (PuzzleBoard.cellWidth + PuzzleBoard.cellSpacing);
+                                  return Positioned(
+                                    left: x,
+                                    top: 0,
+                                    child: Selector<GridState, double>(
+                                      selector: (_, s) => s.isFinalizing ? s.finalizationProgress : 0.0,
+                                      builder: (context, progress, _) {
+                                        return Opacity(
+                                          opacity: (1.0 - progress).clamp(0.0, 1.0),
+                                          child: IgnorePointer(
+                                            ignoring: progress > 0.05,
+                                            child: ColHandleWidget(index: c),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  );
+                                }),
+
+                                // 4. Tool 2 — column footers
+                                if (activeTool == 2)
+                                  ...List.generate(6, (c) {
+                                    final x = PuzzleBoard.handleSize + c * (PuzzleBoard.cellWidth + PuzzleBoard.cellSpacing);
+                                    final y = PuzzleBoard.handleSize + 8 * (PuzzleBoard.cellHeight + PuzzleBoard.cellSpacing);
+
+                                    // Calculate sum of last characters in base 36
+                                    int sum = 0;
+                                    for (int r = 0; r < 8; r++) {
+                                      final cell = state.getCellAt(c, r);
+                                      if (cell != null && cell.codeText.isNotEmpty) {
+                                        final lastChar = cell.codeText[cell.codeText.length - 1];
+                                        sum += getBase36Value(lastChar);
+                                      }
+                                    }
+                                    final isValid = (sum % 36 == 0);
+
+                                    return Positioned(
+                                      left: x,
+                                      top: y,
+                                      child: Selector<GridState, double>(
+                                        selector: (_, s) => s.isFinalizing ? s.finalizationProgress : 0.0,
+                                        builder: (context, progress, child) {
+                                          return Opacity(
+                                            opacity: (1.0 - progress).clamp(0.0, 1.0),
+                                            child: child,
+                                          );
+                                        },
+                                        child: RepaintBoundary(
+                                          child: SizedBox(
+                                            width: PuzzleBoard.cellWidth,
+                                            height: PuzzleBoard.handleSize,
+                                            child: Center(
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                    horizontal: 8.0, vertical: 4.0),
+                                                decoration: BoxDecoration(
+                                                  color: (isValid
+                                                          ? AppColors.success
+                                                          : AppColors.error)
+                                                      .withValues(alpha: 0.12),
+                                                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                                                ),
+                                                child: Icon(
+                                                  isValid
+                                                      ? Icons.check_circle_outline_rounded
+                                                      : Icons.cancel_outlined,
+                                                  size: 12.0,
+                                                  color: isValid
+                                                      ? AppColors.success
+                                                      : AppColors.error,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+
+                                // 5. Tool 3 — row side hints (styled like column footers)
+                                if (activeTool == 3)
+                                  ...List.generate(8, (r) {
+                                    final x = PuzzleBoard.handleSize + 6 * (PuzzleBoard.cellWidth + PuzzleBoard.cellSpacing) + 8.0;
+                                    final y = PuzzleBoard.handleSize + r * (PuzzleBoard.cellHeight + PuzzleBoard.cellSpacing);
+                                    final isBalanced = checkRowBalance(context, r);
+                                    return Positioned(
+                                      left: x,
+                                      top: y,
+                                      child: Selector<GridState, double>(
+                                        selector: (_, s) => s.isFinalizing ? s.finalizationProgress : 0.0,
+                                        builder: (context, progress, child) {
+                                          return Opacity(
+                                            opacity: (1.0 - progress).clamp(0.0, 1.0),
+                                            child: child,
+                                          );
+                                        },
+                                        child: RepaintBoundary(
+                                          child: SizedBox(
+                                            width: 32.0,
+                                            height: PuzzleBoard.cellHeight,
+                                            child: Center(
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                    horizontal: 8.0, vertical: 4.0),
+                                                decoration: BoxDecoration(
+                                                  color: (isBalanced
+                                                          ? AppColors.success
+                                                          : AppColors.error)
+                                                      .withValues(alpha: 0.12),
+                                                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                                                ),
+                                                child: Icon(
+                                                  isBalanced
+                                                      ? Icons.check_circle_outline_rounded
+                                                      : Icons.cancel_outlined,
+                                                  size: 12.0,
+                                                  color: isBalanced
+                                                      ? AppColors.success
+                                                      : AppColors.error,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+
+                                // 6. Animated grid cells
+                                ...state.cellIds.map((id) {
+                                  return CellPositionedSelector(cellId: id);
+                                }),
+
+                                // 7. Tool 5 — quadrant symmetry overlay (Pointed Lines Painter)
+                                if (activeTool == 5)
+                                  IgnorePointer(
+                                    child: RepaintBoundary(
+                                      child: Positioned.fill(
+                                        child: Selector<GridState, double>(
+                                          selector: (_, s) => s.isFinalizing ? s.finalizationProgress : 0.0,
+                                          builder: (context, progress, child) {
+                                            return Opacity(
+                                              opacity: (1.0 - progress).clamp(0.0, 1.0),
+                                              child: child,
+                                            );
+                                          },
+                                          child: CustomPaint(
+                                            painter: SymmetryLinePainter(
+                                              state: state,
+                                              cellWidth: PuzzleBoard.cellWidth,
+                                              cellHeight: PuzzleBoard.cellHeight,
+                                              cellSpacing: PuzzleBoard.cellSpacing,
+                                              handleSize: PuzzleBoard.handleSize,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
                         ),
-                        child: Stack(
-                          children: [
-                            // 1. Ghost slot backgrounds
-                            ...List.generate(8, (r) {
-                              return List.generate(6, (c) {
-                                final x = handleSize + c * (cellWidth + cellSpacing);
-                                final y = handleSize + r * (cellHeight + cellSpacing);
-                                return Positioned(
-                                  left: x,
-                                  top: y,
-                                  child: Container(
-                                    width: cellWidth,
-                                    height: cellHeight,
-                                    decoration: BoxDecoration(
-                                      color: AppColors.borderSubtle,
-                                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                        const SizedBox(height: 16.0),
+                        // ── Action Buttons ───────────────────────────────────────────────
+                        ListenableBuilder(
+                          listenable: state,
+                          builder: (ctx, _) {
+                            final solved = state.isGridSolved;
+                            final isFinished = state.isSolvedAndFinished;
+                            final isFinalizing = state.isFinalizing;
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 24.0),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  // Scramble Button
+                                  if (!isFinished)
+                                    IgnorePointer(
+                                      ignoring: isFinalizing,
+                                      child: Opacity(
+                                        opacity: isFinalizing ? 0.0 : 1.0,
+                                        child: MouseRegion(
+                                          cursor: SystemMouseCursors.click,
+                                          child: GestureDetector(
+                                            onTap: () => state.scrambleGrid(),
+                                            child: AnimatedContainer(
+                                              duration: AppDurations.normal,
+                                              padding: const EdgeInsets.all(12.0),
+                                              decoration: BoxDecoration(
+                                                color: solved ? AppColors.success : Colors.white,
+                                                shape: BoxShape.circle,
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: (solved ? AppColors.success : Colors.white).withValues(alpha: 0.2),
+                                                    blurRadius: 10,
+                                                    offset: const Offset(0, 4),
+                                                  ),
+                                                ],
+                                              ),
+                                              child: Icon(
+                                                Icons.shuffle_rounded,
+                                                size: 20.0,
+                                                color: solved ? Colors.white : AppColors.background,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                );
-                              });
-                            }).expand((e) => e),
-
-                            // 2. Row handles
-                            ...List.generate(8, (r) {
-                              final y = handleSize + r * (cellHeight + cellSpacing);
-                              return Positioned(
-                                  left: 0,
-                                  top: y,
-                                  child: RowHandleWidget(index: r),
-                                );
-                              }),
-
-                            // 3. Column handles
-                            ...List.generate(6, (c) {
-                              final x = handleSize + c * (cellWidth + cellSpacing);
-                              return Positioned(
-                                left: x,
-                                top: 0,
-                                child: ColHandleWidget(index: c),
-                              );
-                            }),
-
-                            // 4. Tool 2 — column footers
-                            if (activeTool == 2)
-                              ...List.generate(6, (c) {
-                                final x = handleSize + c * (cellWidth + cellSpacing);
-                                final y = handleSize + 8 * (cellHeight + cellSpacing);
-
-                                // Calculate sum of last characters in base 36
-                                int sum = 0;
-                                for (int r = 0; r < 8; r++) {
-                                  final cell = state.getCellAt(c, r);
-                                  if (cell != null && cell.codeText.isNotEmpty) {
-                                    final lastChar = cell.codeText[cell.codeText.length - 1];
-                                    sum += getBase36Value(lastChar);
-                                  }
-                                }
-                                final isValid = (sum % 36 == 0);
-
-                                return Positioned(
-                                  left: x,
-                                  top: y,
-                                  child: RepaintBoundary(
-                                    child: SizedBox(
-                                      width: cellWidth,
-                                      height: handleSize,
-                                      child: Center(
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 8.0, vertical: 4.0),
+                                  if (!isFinished) const SizedBox(width: 16.0),
+                                  // Check Button
+                                  IgnorePointer(
+                                    ignoring: isFinalizing && !isFinished,
+                                    child: MouseRegion(
+                                      cursor: SystemMouseCursors.click,
+                                      child: GestureDetector(
+                                        onTap: _handleCheckPressed,
+                                        child: AnimatedContainer(
+                                          duration: AppDurations.normal,
+                                          padding: const EdgeInsets.all(12.0),
                                           decoration: BoxDecoration(
-                                            color: (isValid
-                                                    ? AppColors.success
-                                                    : AppColors.error)
-                                                .withValues(alpha: 0.12),
-                                            borderRadius: BorderRadius.circular(AppRadius.pill),
+                                            color: (isFinished || solved) ? AppColors.success : Colors.white,
+                                            shape: BoxShape.circle,
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: ((isFinished || solved) ? AppColors.success : Colors.white).withValues(alpha: 0.2),
+                                                blurRadius: 10,
+                                                offset: const Offset(0, 4),
+                                              ),
+                                            ],
                                           ),
                                           child: Icon(
-                                            isValid
-                                                ? Icons.check_circle_outline_rounded
-                                                : Icons.cancel_outlined,
-                                            size: 12.0,
-                                            color: isValid
-                                                ? AppColors.success
-                                                : AppColors.error,
+                                            isFinished ? Icons.favorite_rounded : Icons.check_rounded,
+                                            size: 20.0,
+                                            color: (isFinished || solved) ? Colors.white : AppColors.background,
                                           ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                );
-                              }),
-
-                            // 5. Tool 3 — row side hints (styled like column footers)
-                            if (activeTool == 3)
-                              ...List.generate(8, (r) {
-                                final x = handleSize + 6 * (cellWidth + cellSpacing) + 8.0;
-                                final y = handleSize + r * (cellHeight + cellSpacing);
-                                final isBalanced = checkRowBalance(context, r);
-                                return Positioned(
-                                  left: x,
-                                  top: y,
-                                  child: RepaintBoundary(
-                                    child: SizedBox(
-                                      width: 32.0,
-                                      height: cellHeight,
-                                      child: Center(
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 8.0, vertical: 4.0),
-                                          decoration: BoxDecoration(
-                                            color: (isBalanced
-                                                    ? AppColors.success
-                                                    : AppColors.error)
-                                                .withValues(alpha: 0.12),
-                                            borderRadius: BorderRadius.circular(AppRadius.pill),
-                                          ),
-                                          child: Icon(
-                                            isBalanced
-                                                ? Icons.check_circle_outline_rounded
-                                                : Icons.cancel_outlined,
-                                            size: 12.0,
-                                            color: isBalanced
-                                                ? AppColors.success
-                                                : AppColors.error,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }),
-
-                            // 6. Animated grid cells
-                            ...state.cellIds.map((id) {
-                              return CellPositionedSelector(cellId: id);
-                            }),
-
-                            // 7. Tool 5 — quadrant symmetry overlay (Pointed Lines Painter)
-                            if (activeTool == 5)
-                              IgnorePointer(
-                                child: RepaintBoundary(
-                                  child: Positioned.fill(
-                                    child: CustomPaint(
-                                      painter: SymmetryLinePainter(
-                                        state: state,
-                                        cellWidth: cellWidth,
-                                        cellHeight: cellHeight,
-                                        cellSpacing: cellSpacing,
-                                        handleSize: handleSize,
-                                      ),
-                                    ),
-                                  ),
+                                  ],
                                 ),
-                              ),
-                          ],
-                        ),
+                              );
+                            },
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
-        ),
-
-        // ── Action Buttons ───────────────────────────────────────────────
-        ListenableBuilder(
-          listenable: state,
-          builder: (ctx, _) {
-            final solved = state.isGridSolved;
-            return Container(
-              margin: const EdgeInsets.only(top: 8.0, bottom: 20.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Scramble Button
-                  MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
-                      onTap: () => state.scrambleGrid(),
-                      child: AnimatedContainer(
-                        duration: AppDurations.normal,
-                        padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
-                        decoration: BoxDecoration(
-                          color: solved ? AppColors.success : Colors.white,
-                          borderRadius: BorderRadius.circular(AppRadius.pill),
-                          boxShadow: [
-                            BoxShadow(
-                              color: (solved ? AppColors.success : Colors.white).withValues(alpha: 0.2),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Text(
-                          'SCRAMBLE',
-                          style: AppTextStyles.label(
-                            color: solved ? Colors.white : AppColors.background,
-                          ).copyWith(fontWeight: FontWeight.w800, letterSpacing: 1.0),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16.0),
-                  // Check Button
-                  MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
-                      onTap: () => state.checkGrid(ctx),
-                      child: AnimatedContainer(
-                        duration: AppDurations.normal,
-                        padding: const EdgeInsets.all(12.0),
-                        decoration: BoxDecoration(
-                          color: solved ? AppColors.success : Colors.white,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: (solved ? AppColors.success : Colors.white).withValues(alpha: 0.2),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          Icons.check_rounded,
-                          size: 20.0,
-                          color: solved ? Colors.white : AppColors.background,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      ],
-    );
+        ],
+      );
+    }
   }
-}
 
 
+// ---------------------------------------------------------------------------
+// RowHandleState / ColHandleState
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // RowHandleState / ColHandleState
 // ---------------------------------------------------------------------------
@@ -412,7 +607,7 @@ class _RowHandleWidgetState extends State<RowHandleWidget> {
         selector: (_, s) => _HandleState(
           isSelected: s.selectedRowIndex == widget.index,
           isDimmed: s.draggingRowIndex != null && s.draggingRowIndex != widget.index,
-          isCharacterMode: s.isCharacterMode,
+          isCharacterMode: s.isCharacterMode || s.isFinalizing || s.isSolvedAndFinished,
         ),
         builder: (context, hs, _) {
           final iconColor = (hs.isSelected || _hovered)
@@ -420,10 +615,11 @@ class _RowHandleWidgetState extends State<RowHandleWidget> {
               : AppColors.textMuted;
 
           final handleVisual = MouseRegion(
-            onEnter: (_) => setState(() => _hovered = true),
-            onExit: (_) => setState(() => _hovered = false),
+            onEnter: hs.isCharacterMode ? null : (_) => setState(() => _hovered = true),
+            onExit: hs.isCharacterMode ? null : (_) => setState(() => _hovered = false),
+            cursor: hs.isCharacterMode ? SystemMouseCursors.basic : SystemMouseCursors.click,
             child: GestureDetector(
-              onTap: () => state.handleRowTap(widget.index),
+              onTap: hs.isCharacterMode ? null : () => state.handleRowTap(widget.index),
               child: AnimatedOpacity(
                 duration: AppDurations.fast,
                 opacity: hs.isDimmed ? 0.35 : 1.0,
@@ -496,7 +692,7 @@ class _ColHandleWidgetState extends State<ColHandleWidget> {
         selector: (_, s) => _HandleState(
           isSelected: s.selectedColIndex == widget.index,
           isDimmed: s.draggingColIndex != null && s.draggingColIndex != widget.index,
-          isCharacterMode: s.isCharacterMode,
+          isCharacterMode: s.isCharacterMode || s.isFinalizing || s.isSolvedAndFinished,
         ),
         builder: (context, hs, _) {
           final iconColor = (hs.isSelected || _hovered)
@@ -504,10 +700,11 @@ class _ColHandleWidgetState extends State<ColHandleWidget> {
               : AppColors.textMuted;
 
           final handleVisual = MouseRegion(
-            onEnter: (_) => setState(() => _hovered = true),
-            onExit: (_) => setState(() => _hovered = false),
+            onEnter: hs.isCharacterMode ? null : (_) => setState(() => _hovered = true),
+            onExit: hs.isCharacterMode ? null : (_) => setState(() => _hovered = false),
+            cursor: hs.isCharacterMode ? SystemMouseCursors.basic : SystemMouseCursors.click,
             child: GestureDetector(
-              onTap: () => state.handleColTap(widget.index),
+              onTap: hs.isCharacterMode ? null : () => state.handleColTap(widget.index),
               child: AnimatedOpacity(
                 duration: AppDurations.fast,
                 opacity: hs.isDimmed ? 0.35 : 1.0,
@@ -561,6 +758,8 @@ class CellRenderState {
   final int activeTool;
   final int revealedCount;
   final bool isProgressiveLoading;
+  final bool isFinalizing;
+  final double finalizationProgress;
 
   const CellRenderState({
     required this.cell,
@@ -569,6 +768,8 @@ class CellRenderState {
     required this.activeTool,
     required this.revealedCount,
     required this.isProgressiveLoading,
+    required this.isFinalizing,
+    required this.finalizationProgress,
   });
 
   @override
@@ -584,13 +785,16 @@ class CellRenderState {
           isDimmed == other.isDimmed &&
           activeTool == other.activeTool &&
           revealedCount == other.revealedCount &&
-          isProgressiveLoading == other.isProgressiveLoading;
+          isProgressiveLoading == other.isProgressiveLoading &&
+          isFinalizing == other.isFinalizing &&
+          finalizationProgress == other.finalizationProgress;
 
   @override
   int get hashCode => Object.hash(
         cell.currentCol, cell.currentRow, cell.codeText,
         cell.secretLetter, isSelected, isDimmed, activeTool,
-        revealedCount, isProgressiveLoading,
+        revealedCount, isProgressiveLoading, isFinalizing,
+        finalizationProgress,
       );
 }
 
@@ -603,6 +807,7 @@ class CellPositionedSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final state = Provider.of<GridState>(context, listen: false);
     return Selector<GridState, CellRenderState>(
       selector: (_, s) => CellRenderState(
         cell: s.getCellById(cellId),
@@ -611,19 +816,36 @@ class CellPositionedSelector extends StatelessWidget {
         activeTool: s.activeTool,
         revealedCount: s.revealedCount,
         isProgressiveLoading: s.isProgressiveLoading,
+        isFinalizing: s.isFinalizing,
+        finalizationProgress: s.finalizationProgress,
       ),
       builder: (context, rs, _) {
-        final x = PuzzleBoard.handleSize +
+        final int slotIndex = rs.cell.currentRow * 6 + rs.cell.currentCol;
+
+        final double gridX = PuzzleBoard.handleSize +
             rs.cell.currentCol * (PuzzleBoard.cellWidth + PuzzleBoard.cellSpacing);
-        final y = PuzzleBoard.handleSize +
+        final double gridY = PuzzleBoard.handleSize +
             rs.cell.currentRow * (PuzzleBoard.cellHeight + PuzzleBoard.cellSpacing);
+
+        double targetX = gridX;
+        double targetY = gridY;
+
+        if (rs.isFinalizing) {
+          final msgPos = state.getFinalMessagePosition(slotIndex, 404.0);
+          targetX = gridX + (msgPos.dx - gridX) * rs.finalizationProgress;
+          targetY = gridY + (msgPos.dy - gridY) * rs.finalizationProgress;
+        }
+
+        final duration = rs.isFinalizing
+            ? Duration.zero
+            : const Duration(milliseconds: 300);
 
         return AnimatedPositioned(
           key: ValueKey(rs.cell.id),
-          duration: const Duration(milliseconds: 300),
+          duration: duration,
           curve: Curves.easeInOutCubic,
-          left: x,
-          top: y,
+          left: targetX,
+          top: targetY,
           child: CellInteractionWidget(
             cell: rs.cell,
             isSelected: rs.isSelected,
@@ -664,15 +886,17 @@ class _CellInteractionWidgetState extends State<CellInteractionWidget> {
   Widget build(BuildContext context) {
     final state = Provider.of<GridState>(context, listen: false);
     final isActive = widget.isSelected || _hovered;
-    final isChar = widget.activeTool == 6;
+    final isChar = widget.activeTool == 6 || state.isFinalizing || state.isSolvedAndFinished;
 
     Widget cellContent = RepaintBoundary(
       child: MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        cursor: SystemMouseCursors.click,
+        onEnter: (state.isFinalizing || state.isSolvedAndFinished) ? null : (_) => setState(() => _hovered = true),
+        onExit: (state.isFinalizing || state.isSolvedAndFinished) ? null : (_) => setState(() => _hovered = false),
+        cursor: (state.isFinalizing || state.isSolvedAndFinished) ? SystemMouseCursors.basic : SystemMouseCursors.click,
         child: GestureDetector(
-          onTap: () => state.handleCellTap(widget.cell.id),
+          onTap: (state.isFinalizing || state.isSolvedAndFinished)
+              ? null
+              : () => state.handleCellTap(widget.cell.id),
           child: _CellVisual(
             cell: widget.cell,
             isActive: isActive,
@@ -740,7 +964,7 @@ class _CellVisual extends StatelessWidget {
     final bool isProgressiveHidden = state.isProgressiveLoading && slotIndex >= state.revealedCount;
     final bool isEmptySlot = isProgressiveHidden || cell.codeText.isEmpty;
 
-    final isChar  = activeTool == 6;
+    final isChar = activeTool == 6 || state.isFinalizing;
 
     // Tool 1 — valid HEX coloring
     Color? hexColor;
@@ -753,42 +977,57 @@ class _CellVisual extends StatelessWidget {
     }
 
     // Background color
-    final bg = isEmptySlot
-        ? AppColors.surfaceHigh
-        : (isChar
-            ? AppColors.textPrimary
-            : (activeTool == 1 && hexColor != null
-                ? hexColor
-                : (isActive ? AppColors.textPrimary : AppColors.surfaceHigh)));
+    final bg = state.isFinalizing
+        ? Colors.transparent
+        : (isEmptySlot
+            ? AppColors.surfaceHigh
+            : (isChar
+                ? AppColors.textPrimary
+                : (activeTool == 1 && hexColor != null
+                    ? hexColor
+                    : (isActive ? AppColors.textPrimary : AppColors.surfaceHigh))));
 
     // Text color
-    Color textCol = isEmptySlot
-        ? Colors.transparent
-        : (isChar
-            ? AppColors.background
-            : (activeTool == 1 && hexColor != null
+    Color textCol = state.isFinalizing
+        ? Colors.white
+        : (isEmptySlot
+            ? Colors.transparent
+            : (isChar
                 ? AppColors.background
-                : (isActive ? AppColors.background : AppColors.textPrimary)));
+                : (activeTool == 1 && hexColor != null
+                    ? AppColors.background
+                    : (isActive ? AppColors.background : AppColors.textPrimary))));
 
     // Tool 4 — adjacency text coloring
-    if (activeTool == 4 && !isEmptySlot) {
+    if (activeTool == 4 && !isEmptySlot && !state.isFinalizing) {
       final isValid = checkAdjacency(context, cell);
       textCol = isValid ? AppColors.success : AppColors.error;
     }
 
+    final double baseOpacity = isDimmed ? 0.3 : 1.0;
+    final double finalOpacity = baseOpacity;
+
+    final double baseScale = isActive ? 1.04 : 1.0;
+    final double finalScale = baseScale;
+
+    final double baseSize = isChar ? 12.0 : 8.5;
+    final double fontSize = state.isFinalizing
+        ? baseSize + (16.0 - baseSize) * state.finalizationProgress
+        : baseSize;
+
     return AnimatedOpacity(
       duration: AppDurations.fast,
-      opacity: isDimmed ? 0.3 : 1.0,
+      opacity: finalOpacity,
       child: AnimatedScale(
         duration: AppDurations.fast,
-        scale: isActive ? 1.04 : 1.0,
+        scale: finalScale,
         child: Container(
           width: PuzzleBoard.cellWidth,
           height: PuzzleBoard.cellHeight,
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(AppRadius.sm),
-            boxShadow: (isActive && !isEmptySlot)
+            boxShadow: (isActive && !isEmptySlot && !state.isFinalizing)
                 ? [
                     BoxShadow(
                       color: (isChar ? AppColors.textPrimary : cell.color)
@@ -801,10 +1040,10 @@ class _CellVisual extends StatelessWidget {
           ),
           child: Center(
             child: Text(
-              isEmptySlot ? '' : (isChar ? cell.secretLetter : cell.codeText),
+              isEmptySlot ? '' : ((isChar || state.isFinalizing) ? cell.secretLetter : cell.codeText),
               style: AppTextStyles.code(
                 color: textCol,
-                size: isChar ? 12.0 : 8.5,
+                size: fontSize,
               ),
             ),
           ),

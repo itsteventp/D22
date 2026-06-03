@@ -75,8 +75,11 @@ class _ImageGalleryDialogState extends State<ImageGalleryDialog> {
       }
 
       const double pad = _tilePad;
-      final double totalW = imgs.length * (_tileW + pad) + pad;
-      const double totalH = _tileH + pad * 2;
+      const int cols = 8;
+      final int rows = (imgs.length / cols).ceil();
+
+      final double totalW = cols * (_tileW + pad) + pad;
+      final double totalH = rows * (_tileH + pad) + pad;
 
       final canvas = html.CanvasElement(
         width: totalW.ceil(),
@@ -91,8 +94,10 @@ class _ImageGalleryDialogState extends State<ImageGalleryDialog> {
 
       for (int i = 0; i < imgs.length; i++) {
         final img = imgs[i];
-        final double dstX = pad + i * (_tileW + pad);
-        const double dstY = pad;
+        final int col = i % cols;
+        final int row = i ~/ cols;
+        final double dstX = pad + col * (_tileW + pad);
+        final double dstY = pad + row * (_tileH + pad);
 
         // Compute 3:4 center-crop source rect
         final double iw = img.naturalWidth.toDouble();

@@ -67,11 +67,28 @@ class GridState extends ChangeNotifier {
   bool _isLoggingIn = false;
   DateTime? _startDate;
 
+  // ── Finalization / completion state ────────────────────────────────────────
+  bool _isFinalizing = false;
+  double _finalizationProgress = 0.0;
+  bool _isSolvedAndFinished = false;
+
   // Getters
   int get currentScreen => _currentScreen;
   List<GridCell> get cells => _cells;
   int get activeTool => _activeTool;
   bool get isCharacterMode => _activeTool == 6;
+  bool get isFinalizing => _isFinalizing;
+  double get finalizationProgress => _finalizationProgress;
+  bool get isSolvedAndFinished => _isSolvedAndFinished;
+
+  bool get isDevMode {
+    try {
+      final href = html.window.location.href.toLowerCase();
+      return href.contains('dev=true') || href.contains('dev?true');
+    } catch (_) {
+      return false;
+    }
+  }
 
   String? get selectedCellId => _selectedCellId;
   int? get selectedRowIndex => _selectedRowIndex;
@@ -92,6 +109,23 @@ class GridState extends ChangeNotifier {
   Set<String> get activeEndingSet => Set.unmodifiable(_activeEndings);
   List<String> get unlockOrder => List.unmodifiable(_unlockOrder);
   bool get allEndingsUnlocked => _unlockOrder.length == 5;
+
+  int get unlockedCluesCount {
+    if (isDevMode) return 5;
+    if (_startDate == null) return 0;
+    final diff = DateTime.now().difference(_startDate!);
+    final days = diff.inHours ~/ 24;
+    return days.clamp(0, 5);
+  }
+
+  bool isClueUnlocked(String concept) {
+    if (isDevMode) return true;
+    if (!allEndingsUnlocked) return false;
+    final count = unlockedCluesCount;
+    final idx = _unlockOrder.indexOf(concept);
+    if (idx == -1) return false;
+    return idx < count;
+  }
 
   // Auth / session getters
   bool get isLoggedIn => _isLoggedIn;
@@ -266,6 +300,24 @@ class GridState extends ChangeNotifier {
         }
 
         await syncGameStateToSupabase();
+      }
+
+      if (allEndingsUnlocked && _startDate == null) {
+        _startDate = DateTime.now();
+        await syncGameStateToSupabase();
+      }
+
+      if (isGridSolved) {
+        _isSolvedAndFinished = true;
+        _isFinalizing = true;
+        _finalizationProgress = 1.0;
+      } else {
+        final localSolved = html.window.localStorage['is_solved_and_finished'];
+        if (localSolved == 'true') {
+          _isSolvedAndFinished = true;
+          _isFinalizing = true;
+          _finalizationProgress = 1.0;
+        }
       }
 
       notifyListeners();
@@ -593,6 +645,10 @@ class GridState extends ChangeNotifier {
           return;
         }
         activateEnding(concept);
+        if (_unlockOrder.length == 5 && _startDate == null) {
+          _startDate = DateTime.now();
+          await syncGameStateToSupabase();
+        }
         if (context.mounted) {
           _showToast(context, 'Ending discovered: $title', conceptColor);
         }
@@ -729,7 +785,7 @@ class GridState extends ChangeNotifier {
         'image_path': imagePath,
       });
 
-      if (_unlockOrder.length == 5) {
+      if (_unlockOrder.length == 5 && _startDate == null) {
         _startDate = DateTime.now();
         await syncGameStateToSupabase();
       }
@@ -810,6 +866,10 @@ class GridState extends ChangeNotifier {
   // Grid Mode Actions
   void setActiveTool(int tool) {
     if (tool >= 0 && tool <= 6) {
+      if (tool >= 1 && tool <= 5) {
+        final concept = 'c$tool';
+        if (!isClueUnlocked(concept)) return;
+      }
       _activeTool = tool;
       clearSelection();
       notifyListeners();
@@ -903,7 +963,10 @@ class GridState extends ChangeNotifier {
       for (int c = 0; c < 6; c++) {
         final String code = flatCodes[index++];
         final Color color = conceptColors[rand.nextInt(conceptColors.length)];
-        final String letter = alphabet[rand.nextInt(alphabet.length)];
+        final item = _itemsCache[code.toUpperCase()];
+        final String letter = item != null
+            ? (item['secret_letter'] ?? '')
+            : alphabet[rand.nextInt(alphabet.length)];
 
         _cells.add(
           GridCell(
@@ -921,6 +984,168 @@ class GridState extends ChangeNotifier {
     if (syncToSupabase && isLoggedIn) {
       syncGameStateToSupabase();
     }
+  }
+
+  // ── Finalization helper methods ──────────────────────────────────────────
+  
+  void startFinalization() {
+    _isFinalizing = true;
+    _finalizationProgress = 0.0;
+    // Make sure cells have their correct secret letters from items cache
+    for (int i = 0; i < _cells.length; i++) {
+      final cell = _cells[i];
+      final item = _itemsCache[cell.codeText.toUpperCase()];
+      if (item != null) {
+        final secretLetter = item['secret_letter'] ?? '';
+        _cells[i] = cell.copyWith(secretLetter: secretLetter);
+      }
+    }
+    notifyListeners();
+  }
+
+  void updateFinalizationProgress(double progress) {
+    if (_isFinalizing) {
+      _finalizationProgress = progress;
+      notifyListeners();
+    }
+  }
+
+  void cancelFinalization() {
+    _isFinalizing = false;
+    _finalizationProgress = 0.0;
+    notifyListeners();
+  }
+
+  void completePuzzle() {
+    _isSolvedAndFinished = true;
+    _isFinalizing = true;
+    _finalizationProgress = 1.0;
+    html.window.localStorage['is_solved_and_finished'] = 'true';
+    notifyListeners();
+  }
+
+  void resetCompletion() {
+    html.window.localStorage.remove('is_solved_and_finished');
+    _isSolvedAndFinished = false;
+    _isFinalizing = false;
+    _finalizationProgress = 0.0;
+    scrambleGrid();
+  }
+
+  void solveGrid() {
+    final List<Color> conceptColors = [
+      AppColors.conceptPurple,
+      AppColors.conceptBlue,
+      AppColors.conceptTeal,
+      AppColors.conceptOrange,
+      AppColors.conceptRose,
+    ];
+    final Random rand = Random();
+
+    _cells = [];
+    for (int r = 0; r < 8; r++) {
+      for (int c = 0; c < 6; c++) {
+        final code = kCorrectGrid[r][c];
+        final color = conceptColors[rand.nextInt(conceptColors.length)];
+        final item = _itemsCache[code.toUpperCase()];
+        final letter = item != null ? (item['secret_letter'] ?? '') : 'A';
+
+        _cells.add(GridCell(
+          id: 'cell_${r}_$c',
+          currentCol: c,
+          currentRow: r,
+          codeText: code,
+          color: color,
+          secretLetter: letter,
+        ));
+      }
+    }
+    _isSolvedAndFinished = false;
+    _isFinalizing = false;
+    _finalizationProgress = 0.0;
+    notifyListeners();
+    syncGameStateToSupabase();
+  }
+
+  Offset getFinalMessagePosition(int slotIndex, double boardWidth) {
+    int lineIndex;
+    int blockIndex;
+    int charIndexInBlock;
+
+    final List<int> line1Blocks = [5, 6, 2, 4];
+    final List<int> line2Blocks = [5, 1, 2, 4, 7];
+    final List<int> line3Blocks = [4, 8];
+
+    if (slotIndex >= 0 && slotIndex <= 16) {
+      lineIndex = 0;
+      int rem = slotIndex;
+      blockIndex = 0;
+      for (int i = 0; i < line1Blocks.length; i++) {
+        if (rem < line1Blocks[i]) {
+          blockIndex = i;
+          break;
+        }
+        rem -= line1Blocks[i];
+      }
+      charIndexInBlock = rem;
+    } else if (slotIndex >= 17 && slotIndex <= 35) {
+      lineIndex = 1;
+      int rem = slotIndex - 17;
+      blockIndex = 0;
+      for (int i = 0; i < line2Blocks.length; i++) {
+        if (rem < line2Blocks[i]) {
+          blockIndex = i;
+          break;
+        }
+        rem -= line2Blocks[i];
+      }
+      charIndexInBlock = rem;
+    } else if (slotIndex >= 36 && slotIndex <= 47) {
+      lineIndex = 2;
+      int rem = slotIndex - 36;
+      blockIndex = 0;
+      for (int i = 0; i < line3Blocks.length; i++) {
+        if (rem < line3Blocks[i]) {
+          blockIndex = i;
+          break;
+        }
+        rem -= line3Blocks[i];
+      }
+      charIndexInBlock = rem;
+    } else {
+      return Offset(boardWidth / 2 - 24.0, 200.0);
+    }
+
+    final List<int> currentLineBlocks = lineIndex == 0
+        ? line1Blocks
+        : (lineIndex == 1 ? line2Blocks : line3Blocks);
+
+    const double charWidth = 12.0;
+    const double charSpacing = 1.0;
+    const double wordSpacing = 10.0;
+
+    double totalWidth = 0.0;
+    for (int i = 0; i < currentLineBlocks.length; i++) {
+      final len = currentLineBlocks[i];
+      totalWidth += len * charWidth + (len - 1) * charSpacing;
+      if (i < currentLineBlocks.length - 1) {
+        totalWidth += wordSpacing;
+      }
+    }
+
+    final startX = (boardWidth - totalWidth) / 2;
+
+    double precedingWidth = 0.0;
+    for (int i = 0; i < blockIndex; i++) {
+      final len = currentLineBlocks[i];
+      precedingWidth += len * charWidth + (len - 1) * charSpacing + wordSpacing;
+    }
+
+    // Adjust by -(cellWidth/2 - charWidth/2) so that the cell's center aligns with the character's centered layout position.
+    final x = startX + precedingWidth + charIndexInBlock * (charWidth + charSpacing) - (24.0 - charWidth / 2);
+    final double y = 80.0 + lineIndex * 50.0;
+
+    return Offset(x, y);
   }
 
   // Find a cell at coordinates

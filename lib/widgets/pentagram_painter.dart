@@ -44,6 +44,10 @@ class PentagramPainter extends CustomPainter {
   final double nodeRadius;  // injected — interpolated during map↔grid transition
   final double coreRadius;
 
+  final bool isGridMode;
+  final int unlockedCluesCount;
+  final DateTime? startDate;
+
   // Ordered concept list (clockwise from top, matching pentagram layout)
   static const List<String> _conceptOrder = ['c1', 'c2', 'c3', 'c4', 'c5'];
 
@@ -59,6 +63,9 @@ class PentagramPainter extends CustomPainter {
     this.activeToolIndex = 0,
     this.nodeRadius = 18.0,  // default = map mode size
     this.coreRadius = 12.0,
+    this.isGridMode = false,
+    this.unlockedCluesCount = 5,
+    this.startDate,
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -116,12 +123,17 @@ class PentagramPainter extends CustomPainter {
       final isToolActive = isActive && toolMap[concept] == activeToolIndex;
       final color = kConceptColors[concept] ?? Colors.grey;
 
+      // Unlocked state computation
+      final conceptIndex = unlockOrder.indexOf(concept);
+      final isConceptUnlocked = !isGridMode || 
+          (conceptIndex != -1 && conceptIndex < unlockedCluesCount);
+
       // Scale: active tool → 1.07, hovered → 1.10, default → 1.0
       final scale = isHovered ? 1.10 : (isToolActive ? 1.07 : 1.0);
-      final r = nodeRadius * scale;
+      final r = isConceptUnlocked ? (nodeRadius * scale) : 3.0;
 
       // Active outer glow
-      if (isActive) {
+      if (isActive && isConceptUnlocked) {
         canvas.drawCircle(
           pos, r * 2.0,
           Paint()
@@ -134,7 +146,7 @@ class PentagramPainter extends CustomPainter {
       canvas.drawCircle(
         pos, r,
         Paint()
-          ..color = isActive
+          ..color = (isActive && isConceptUnlocked)
               ? color.withValues(alpha: isHovered ? 0.28 : (isToolActive ? 0.22 : 0.13))
               : AppColors.background.withValues(alpha: 0.75),
       );
@@ -143,15 +155,66 @@ class PentagramPainter extends CustomPainter {
       canvas.drawCircle(
         pos, r,
         Paint()
-          ..color = isActive
+          ..color = (isActive && isConceptUnlocked)
               ? color.withValues(alpha: isHovered ? 0.95 : (isToolActive ? 0.85 : 0.62))
               : AppColors.textMuted.withValues(alpha: isHovered ? 0.38 : 0.22)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = isToolActive ? 2.2 : (isActive ? 1.5 : 1.0),
+          ..strokeWidth = (isToolActive && isConceptUnlocked) ? 2.2 : ((isActive && isConceptUnlocked) ? 1.5 : 1.0),
       );
 
+      // Countdown timer for the upcoming locked clue
+      final isUpcoming = isGridMode && conceptIndex == unlockedCluesCount && startDate != null;
+      if (isUpcoming) {
+        final nextUnlockTime = startDate!.add(Duration(hours: (unlockedCluesCount + 1) * 24));
+        final diff = nextUnlockTime.difference(DateTime.now());
 
+        String remainingText = '';
+        if (diff.inHours >= 1) {
+          remainingText = '${diff.inHours}h';
+        } else if (diff.inMinutes >= 1) {
+          remainingText = '${diff.inMinutes}m';
+        } else {
+          remainingText = '${diff.inSeconds.clamp(0, 59)}s';
+        }
+
+        final dir = (pos - center) / (pos - center).distance;
+        final indicatorCenter = pos + dir * 16.0;
+        final indicatorColor = kConceptColors[concept] ?? AppColors.textMuted;
+
+        _drawClockIcon(canvas, indicatorCenter, indicatorColor.withValues(alpha: 0.75));
+
+        final textPainter = TextPainter(
+          text: TextSpan(
+            text: remainingText,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 9.0,
+              color: indicatorColor.withValues(alpha: 0.75),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        );
+        textPainter.layout();
+
+        final double textX = dir.dx >= 0
+            ? indicatorCenter.dx + 8.0
+            : indicatorCenter.dx - 8.0 - textPainter.width;
+        final double textY = indicatorCenter.dy - textPainter.height / 2;
+
+        textPainter.paint(canvas, Offset(textX, textY));
+      }
     }
+  }
+
+  void _drawClockIcon(Canvas canvas, Offset center, Color color) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+    canvas.drawCircle(center, 5.0, paint);
+    canvas.drawLine(center, center + const Offset(0, -3), paint);
+    canvas.drawLine(center, center + const Offset(2.5, 0), paint);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -227,10 +290,7 @@ class PentagramPainter extends CustomPainter {
           ..strokeWidth = 1.0,
       );
     }
-
   }
-
-
 
   // ──────────────────────────────────────────────────────────────────────────
   // shouldRepaint — always repaint when core is visible (for pulse), otherwise
@@ -244,6 +304,9 @@ class PentagramPainter extends CustomPainter {
     return old.activeEndings.length != activeEndings.length ||
         old.animProgress != animProgress ||
         old.hoveredId != hoveredId ||
-        old.activeToolIndex != activeToolIndex;
+        old.activeToolIndex != activeToolIndex ||
+        old.isGridMode != isGridMode ||
+        old.unlockedCluesCount != unlockedCluesCount ||
+        old.startDate != startDate;
   }
 }

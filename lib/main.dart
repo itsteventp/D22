@@ -97,9 +97,9 @@ class _MainNavigatorState extends State<MainNavigator>
   // ── Pentagram geometry constants ───────────────────────────────────────────
   //   Map mode:  node radius 18 px, layout radius up to 165 px
   //   Grid mode: node radius 10 px, layout radius 50 px (compact header)
-  static const double _gridHeaderH   = 150.0; // pixels reserved for mini pentagram
-  static const double _gridCenterY   = 100.0;  // center Y of mini pentagram
-  static const double _gridLayoutR   = 50.0;
+  static const double _gridHeaderH   = 175.0; // pixels reserved for mini pentagram
+  static const double _gridCenterY   = 105.0;  // center Y of mini pentagram
+  static const double _gridLayoutR   = 38.0;   // compact layout radius for balance
   static const double _mapNodeR      = 18.0;
   static const double _gridNodeR     = 10.0;
   static const double _mapCoreR      = 12.0;
@@ -293,12 +293,16 @@ class _MainNavigatorState extends State<MainNavigator>
                 ),
 
                 // ── Layer 2: PuzzleBoard — slides up from below as tTrans → 1
-                Positioned.fill(
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: _gridHeaderH,
+                  height: s.height - _gridHeaderH,
                   child: ListenableBuilder(
                     listenable: _transAnim,
                     builder: (ctx, child) {
                       final t = _transAnim.value;
-                      final dy = lerpDouble(s.height, _gridHeaderH, t)!;
+                      final dy = lerpDouble(s.height - _gridHeaderH, 0.0, t)!;
                       return Transform.translate(
                         offset: Offset(0, dy),
                         child: IgnorePointer(
@@ -357,6 +361,9 @@ class _MainNavigatorState extends State<MainNavigator>
                                       activeToolIndex: state.activeTool,
                                       nodeRadius: nodeR,
                                       coreRadius: coreR,
+                                      isGridMode: isGridMode,
+                                      unlockedCluesCount: state.unlockedCluesCount,
+                                      startDate: state.startDate,
                                     ),
                                     size: s,
                                   ),
@@ -388,7 +395,7 @@ class _MainNavigatorState extends State<MainNavigator>
                                 final String concept = entry.key;
                                 final Offset pos = entry.value;
                                 final bool isActive = state.isEndingActive(concept);
-                                final bool isInteractive = isGridMode && isActive;
+                                final bool isInteractive = isGridMode && isActive && !state.isSolvedAndFinished && state.isClueUnlocked(concept);
 
                                 if (!isInteractive) return const SizedBox.shrink();
 
@@ -432,10 +439,10 @@ class _MainNavigatorState extends State<MainNavigator>
                     builder: (ctx, child) {
                       final tLogin = _loginAnim.value;
                       final tTrans = _transAnim.value;
-                      if (tLogin < 0.95) return const SizedBox.shrink();
+                      final state = Provider.of<GridState>(context, listen: false);
+                      if (tLogin < 0.95 || !state.isDevMode) return const SizedBox.shrink();
                       
                       final isGridMode = tTrans > 0.5;
-                      final state = Provider.of<GridState>(context, listen: false);
 
                       return DevPanel(
                         isGridMode: isGridMode,
@@ -600,6 +607,20 @@ class _DevPanelState extends State<DevPanel> {
                 icon: Icons.play_circle_fill_rounded,
                 color: AppColors.conceptBlue,
                 onTap: () => widget.state.startProgressiveLoad(),
+              ),
+              const SizedBox(height: 6.0),
+              _DevButton(
+                label: 'RESET COMPLETION',
+                icon: Icons.lock_reset_rounded,
+                color: AppColors.error,
+                onTap: () => widget.state.resetCompletion(),
+              ),
+              const SizedBox(height: 6.0),
+              _DevButton(
+                label: 'SOLVE GRID',
+                icon: Icons.auto_awesome_rounded,
+                color: AppColors.success,
+                onTap: () => widget.state.solveGrid(),
               ),
             ],
           ],

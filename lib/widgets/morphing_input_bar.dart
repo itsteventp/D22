@@ -140,6 +140,60 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
     }
   }
 
+  Future<html.ImageElement> _loadHtmlImageFromBytes(Uint8List bytes, String mime) async {
+    final blob = html.Blob([bytes], mime);
+    final url = html.Url.createObjectUrlFromBlob(blob);
+    final img = html.ImageElement()..src = url;
+    await img.onLoad.first;
+    html.Url.revokeObjectUrl(url);
+    return img;
+  }
+
+  Future<Uint8List> _compressImage(Uint8List originalBytes, String originalMime) async {
+    try {
+      final img = await _loadHtmlImageFromBytes(originalBytes, originalMime);
+      final canvas = html.CanvasElement();
+      final ctx = canvas.context2D;
+
+      double width = img.naturalWidth.toDouble();
+      double height = img.naturalHeight.toDouble();
+
+      // Limit max dimension to 1600px
+      const double maxDim = 1600.0;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = (height * maxDim / width);
+          width = maxDim;
+        } else {
+          width = (width * maxDim / height);
+          height = maxDim;
+        }
+      }
+
+      canvas.width = width.round();
+      canvas.height = height.round();
+      ctx.drawImageScaled(img, 0, 0, canvas.width!, canvas.height!);
+
+      double quality = 0.85;
+      Uint8List compressed = originalBytes;
+
+      while (quality > 0.05) {
+        final dataUrl = canvas.toDataUrl('image/jpeg', quality);
+        final base64Str = dataUrl.split(',')[1];
+        compressed = base64Decode(base64Str);
+        if (compressed.lengthInBytes < 1024 * 1024) {
+          break;
+        }
+        quality -= 0.15;
+      }
+
+      return compressed;
+    } catch (e) {
+      debugPrint('Image compression error: $e');
+      return originalBytes;
+    }
+  }
+
   void _handleAttachImage() {
     if (_isUploading) return;
     final input = html.FileUploadInputElement()
@@ -163,15 +217,24 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
         } else {
           bytes = Uint8List.fromList(result as List<int>);
         }
-        final ext = file.name.contains('.')
+
+        final mime = file.type.isNotEmpty ? file.type : 'image/jpeg';
+        String targetMime = mime;
+        String targetExt = file.name.contains('.')
             ? file.name.split('.').last.toLowerCase()
             : 'jpg';
-        final mime = file.type.isNotEmpty ? file.type : 'image/jpeg';
-        final name = 'img_${DateTime.now().millisecondsSinceEpoch}.$ext';
+
+        if (bytes.lengthInBytes >= 1024 * 1024) {
+          bytes = await _compressImage(bytes, mime);
+          targetMime = 'image/jpeg';
+          targetExt = 'jpg';
+        }
+
+        final name = 'img_${DateTime.now().millisecondsSinceEpoch}.$targetExt';
         await Supabase.instance.client.storage
             .from('unlocked_images')
             .uploadBinary(name, bytes,
-                fileOptions: FileOptions(contentType: mime));
+                fileOptions: FileOptions(contentType: targetMime));
         final url = Supabase.instance.client.storage
             .from('unlocked_images')
             .getPublicUrl(name);
@@ -230,6 +293,7 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
 
   @override
   Widget build(BuildContext context) {
+    final state = Provider.of<GridState>(context, listen: false);
     final s = widget.screenSize;
     final t = widget.loginAnim.value;
     final trans = widget.transAnim.value;
@@ -329,11 +393,13 @@ class _MorphingInputBarState extends State<MorphingInputBar> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               const SizedBox(width: 12),
-                              _MicroButton(
-                                icon: Icons.auto_awesome_rounded,
-                                onTap: _isUploading ? null : _handleAutoImage,
-                              ),
-                              const SizedBox(width: 8),
+                              if (state.isDevMode) ...[
+                                _MicroButton(
+                                  icon: Icons.auto_awesome_rounded,
+                                  onTap: _isUploading ? null : _handleAutoImage,
+                                ),
+                                const SizedBox(width: 8),
+                              ],
                               _MicroButton(
                                 icon: Icons.attach_file_rounded,
                                 onTap: _isUploading ? null : _handleAttachImage,
